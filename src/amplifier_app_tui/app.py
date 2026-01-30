@@ -118,6 +118,13 @@ class AmplifierTUI(App):
         self._update_status()
         # Apply initial responsive layout
         self._apply_responsive_layout()
+        # Set suggester if bridge was set before mount (timing fix)
+        if self._suggester:
+            try:
+                input_zone = self.query_one("#input-zone", InputZone)
+                input_zone.set_suggester(self._suggester)
+            except Exception:
+                pass
 
     def on_resize(self) -> None:
         """Handle terminal resize - apply responsive layout classes."""

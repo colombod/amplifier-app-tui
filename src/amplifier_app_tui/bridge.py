@@ -273,43 +273,59 @@ class RuntimeBridge:
 
         logger.debug(f"Event: {event_type} - {data}")
 
-        if event_type == "content_delta":
+        # Content events (runtime uses dot notation: content.start, content.delta, content.end)
+        if event_type in ("content_delta", "content.delta"):
             # Streaming text content
             content = data.get("content", data.get("delta", ""))
             if content:
                 self.app.append_content(content)
 
-        elif event_type == "thinking_start":
+        elif event_type == "content.start":
+            # Content block starting
+            pass  # Just marks the start, content comes in delta/end
+
+        elif event_type == "content.end":
+            # Content block complete - may contain full content if not streaming
+            content = data.get("content", "")
+            if content:
+                self.app.append_content(content)
+
+        elif event_type in ("thinking_start", "thinking.start"):
             # Agent started thinking
             self.app.set_agent_state("thinking")
 
-        elif event_type == "thinking_delta":
+        elif event_type in ("thinking_delta", "thinking.delta"):
             # Thinking content (usually collapsed)
             content = data.get("content", data.get("delta", ""))
             if content:
                 self.app.add_thinking(content)
 
-        elif event_type == "thinking_end":
+        elif event_type in ("thinking_end", "thinking.end"):
             # Thinking complete
             self.app.end_thinking()
 
-        elif event_type == "tool_call_start":
+        elif event_type in ("tool_call_start", "tool.start", "tool_use.start"):
             # Tool call started
             tool_name = data.get("tool", data.get("name", "unknown"))
-            params = data.get("params", data.get("arguments", {}))
+            params = data.get("params", data.get("arguments", data.get("input", {})))
             tool_id = self.app.add_tool_call(tool_name, params, status="pending")
             self.app.set_agent_state("executing")
             # Store tool_id for later updates
             data["_tui_tool_id"] = tool_id
 
-        elif event_type == "tool_call_complete":
+        elif event_type in (
+            "tool_call_complete",
+            "tool.complete",
+            "tool_use.complete",
+            "tool_result",
+        ):
             # Tool call completed successfully
             tool_id = data.get("_tui_tool_id") or current_tool_id
-            result = data.get("result", data.get("output", ""))
+            result = data.get("result", data.get("output", data.get("content", "")))
             if tool_id:
                 self.app.update_tool_call(tool_id, str(result), "success")
 
-        elif event_type == "tool_call_error":
+        elif event_type in ("tool_call_error", "tool.error", "tool_use.error"):
             # Tool call failed
             tool_id = data.get("_tui_tool_id") or current_tool_id
             error = data.get("error", "Unknown error")

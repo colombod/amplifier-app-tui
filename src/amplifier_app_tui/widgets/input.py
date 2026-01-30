@@ -345,8 +345,8 @@ class InputZone(Static):
         self._completion_provider = provider
         # Update the autocomplete if it exists
         try:
-            autocomplete = self.query_one("#autocomplete", AutoComplete)
-            autocomplete._get_candidates = provider.get_candidates
+            autocomplete = self.query_one("#autocomplete", SmartAutoComplete)
+            autocomplete.candidates = provider.get_candidates
         except Exception:
             pass
 

@@ -5,6 +5,7 @@ Supports:
 - Enter to submit
 - Command history navigation
 - Ghost text autocomplete for @agents, /commands, tool-*
+- Suggestions popup showing all matching options
 """
 
 from __future__ import annotations

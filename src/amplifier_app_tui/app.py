@@ -283,7 +283,11 @@ class AmplifierTUI(App):
 
             if response.result == CommandResult.SUCCESS:
                 if response.message:
-                    self.add_system_message(response.message)
+                    # Use command output block for formatted help (preserves box drawing)
+                    if any(c in response.message for c in "╭╮╰╯│─"):
+                        self.add_command_output(response.message)
+                    else:
+                        self.add_system_message(response.message)
             else:
                 self.add_error(response.message)
             return
@@ -468,6 +472,11 @@ class AmplifierTUI(App):
         """Add a system message to output."""
         output = self.query_one("#output-zone", OutputZone)
         output.add_system_message(message)
+
+    def add_command_output(self, content: str) -> None:
+        """Add command output with preserved formatting (for /help, etc.)."""
+        output = self.query_one("#output-zone", OutputZone)
+        output.add_command_output(content)
 
     def clear_output(self) -> None:
         """Clear the output zone."""

@@ -472,6 +472,33 @@ class SystemMessage(Static):
     """
 
 
+class CommandOutputBlock(Static):
+    """Command output display - preserves formatting for /help, etc.
+
+    Uses monospace rendering to preserve box drawings and alignment.
+    """
+
+    DEFAULT_CSS = """
+    CommandOutputBlock {
+        margin: 1 0;
+        padding: 0;
+        color: $text;
+        background: $surface;
+    }
+    
+    CommandOutputBlock .command-content {
+        padding: 0 1;
+    }
+    """
+
+    def __init__(self, content: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._content = content
+
+    def compose(self) -> ComposeResult:
+        yield Static(self._content, classes="command-content")
+
+
 class StreamingIndicator(Static):
     """Shows when user is scrolled away from live streaming content.
 
@@ -704,6 +731,12 @@ class OutputZone(ScrollableContainer):
         """Add a system message."""
         msg = SystemMessage(message)
         self.mount(msg)
+        self._auto_scroll()
+
+    def add_command_output(self, content: str) -> None:
+        """Add command output with preserved formatting (for /help, etc.)."""
+        block = CommandOutputBlock(content)
+        self.mount(block)
         self._auto_scroll()
 
     # -------------------------------------------------------------------------

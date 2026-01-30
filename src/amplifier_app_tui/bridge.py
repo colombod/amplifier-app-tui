@@ -104,6 +104,11 @@ class RuntimeBridge:
         self._current_tool_id: str | None = None
         self._tool_call_mapping: dict[str, str] = {}
 
+        # Cached completion data (pre-fetched on connect)
+        self._available_agents: list[str] = []
+        self._available_tools: list[str] = []
+        self._available_commands: dict[str, Any] = {}
+
     @property
     def is_connected(self) -> bool:
         """Check if connected to runtime."""
@@ -164,6 +169,9 @@ class RuntimeBridge:
 
             # Start event listener for uncorrelated events (approvals, etc.)
             self._event_task = asyncio.create_task(self._event_loop())
+
+            # Pre-fetch completion data (agents, tools, commands)
+            await self._prefetch_completion_data()
 
             logger.info(
                 f"Connected to runtime (mode={self.config.mode.value}, session={self._session_id})"
@@ -515,108 +523,74 @@ class RuntimeBridge:
     # Completion Data APIs - Used by CompletionProvider for autocomplete
     # -------------------------------------------------------------------------
 
+    async def _prefetch_completion_data(self) -> None:
+        """Pre-fetch completion data (agents, tools, commands) after connecting.
+
+        Called during connect() to populate caches while we're in async context.
+        This avoids async/sync issues when CompletionProvider calls get_* methods.
+        """
+        if not self._client or not self._session_id:
+            return
+
+        # Fetch agents
+        try:
+            agents_data = await self._client.agents.list(self._session_id)
+            self._available_agents = [
+                agent.get("name", "") for agent in agents_data if agent.get("name")
+            ]
+            logger.debug(f"Pre-fetched {len(self._available_agents)} agents")
+        except Exception as e:
+            logger.debug(f"Failed to fetch agents: {e}")
+            self._available_agents = []
+
+        # Fetch tools
+        try:
+            tools_data = await self._client.tools.list(self._session_id)
+            self._available_tools = [
+                tool.get("name", "") for tool in tools_data if tool.get("name")
+            ]
+            logger.debug(f"Pre-fetched {len(self._available_tools)} tools")
+        except Exception as e:
+            logger.debug(f"Failed to fetch tools: {e}")
+            self._available_tools = []
+
+        # Fetch commands
+        try:
+            self._available_commands = await self._client.slash_commands.list()
+            logger.debug(f"Pre-fetched commands: {list(self._available_commands.keys())}")
+        except Exception as e:
+            logger.debug(f"Failed to fetch commands: {e}")
+            self._available_commands = {}
+
     def get_available_agents(self) -> list[str]:
         """Get list of available agent names for @completions.
+
+        Returns cached data that was pre-fetched during connect().
 
         Returns:
             List of agent names (e.g., ["foundation:explorer", "amplifier:amplifier-expert"])
         """
-        if not self.is_connected or not self._client:
-            return []
-
-        try:
-            # Use asyncio to run the async API call
-            import asyncio
-
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're in an async context, need to use a different approach
-                # Create a task and return empty for now, cache will be populated later
-                future = asyncio.ensure_future(self._fetch_agents())
-                if future.done():
-                    return future.result()
-                return []
-            else:
-                return loop.run_until_complete(self._fetch_agents())
-        except Exception as e:
-            logger.debug(f"Failed to get agents: {e}")
-            return []
-
-    async def _fetch_agents(self) -> list[str]:
-        """Async helper to fetch agents from runtime."""
-        try:
-            agents_data = await self._client.agents.list(self._session_id)
-            # Extract agent names from the response
-            return [agent.get("name", "") for agent in agents_data if agent.get("name")]
-        except Exception as e:
-            logger.debug(f"Failed to fetch agents: {e}")
-            return []
+        return self._available_agents
 
     def get_available_tools(self) -> list[str]:
         """Get list of available tool names for completions.
 
+        Returns cached data that was pre-fetched during connect().
+
         Returns:
             List of tool names (e.g., ["bash", "read_file", "web_search"])
         """
-        if not self.is_connected or not self._client:
-            return []
-
-        try:
-            import asyncio
-
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                future = asyncio.ensure_future(self._fetch_tools())
-                if future.done():
-                    return future.result()
-                return []
-            else:
-                return loop.run_until_complete(self._fetch_tools())
-        except Exception as e:
-            logger.debug(f"Failed to get tools: {e}")
-            return []
-
-    async def _fetch_tools(self) -> list[str]:
-        """Async helper to fetch tools from runtime."""
-        try:
-            tools_data = await self._client.tools.list(self._session_id)
-            # Extract tool names from the response
-            return [tool.get("name", "") for tool in tools_data if tool.get("name")]
-        except Exception as e:
-            logger.debug(f"Failed to fetch tools: {e}")
-            return []
+        return self._available_tools
 
     def get_available_commands(self) -> dict[str, Any]:
         """Get available slash commands from runtime.
 
+        Returns cached data that was pre-fetched during connect().
+
         Returns:
             Dict of command info from runtime
         """
-        if not self.is_connected or not self._client:
-            return {}
-
-        try:
-            import asyncio
-
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                future = asyncio.ensure_future(self._fetch_commands())
-                if future.done():
-                    return future.result()
-                return {}
-            else:
-                return loop.run_until_complete(self._fetch_commands())
-        except Exception as e:
-            logger.debug(f"Failed to get commands: {e}")
-            return {}
-
-    async def _fetch_commands(self) -> dict[str, Any]:
-        """Async helper to fetch commands from runtime."""
-        try:
-            return await self._client.slash_commands.list()
-        except Exception as e:
-            logger.debug(f"Failed to fetch commands: {e}")
-            return {}
+        return self._available_commands
 
     async def __aenter__(self) -> RuntimeBridge:
         await self.connect()

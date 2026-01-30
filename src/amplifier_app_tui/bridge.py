@@ -290,21 +290,24 @@ class RuntimeBridge:
             if content:
                 self.app.append_content(content)
 
-        elif event_type in ("thinking_start", "thinking.start"):
+        elif event_type in ("thinking_start", "thinking.start", "thinking:start"):
             # Agent started thinking
             self.app.set_agent_state("thinking")
 
-        elif event_type in ("thinking_delta", "thinking.delta"):
+        elif event_type in ("thinking_delta", "thinking.delta", "thinking:delta"):
             # Thinking content (usually collapsed)
             content = data.get("content", data.get("delta", ""))
             if content:
                 self.app.add_thinking(content)
 
-        elif event_type in ("thinking_end", "thinking.end"):
+        elif event_type in ("thinking_end", "thinking.end", "thinking:end", "thinking:final"):
             # Thinking complete
+            content = data.get("content", "")
+            if content:
+                self.app.add_thinking(content)
             self.app.end_thinking()
 
-        elif event_type in ("tool_call_start", "tool.start", "tool_use.start"):
+        elif event_type in ("tool_call_start", "tool.start", "tool_use.start", "tool.call"):
             # Tool call started
             tool_name = data.get("tool", data.get("name", "unknown"))
             params = data.get("params", data.get("arguments", data.get("input", {})))
@@ -318,6 +321,8 @@ class RuntimeBridge:
             "tool.complete",
             "tool_use.complete",
             "tool_result",
+            "tool.result",
+            "tool.completed",
         ):
             # Tool call completed successfully
             tool_id = data.get("_tui_tool_id") or current_tool_id

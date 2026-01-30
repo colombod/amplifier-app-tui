@@ -484,11 +484,152 @@ class CommandSuggester(Suggester):
         return None
 
 
+@dataclass
+class SuggestionItem:
+    """A suggestion with metadata."""
+
+    value: str
+    description: str = ""
+    category: str = ""  # "command", "agent", "tool", "subcommand", "flag"
+
+
 class CommandCompletions:
     """Provides completion lists for command UI (dropdown menus, etc.)."""
 
     def __init__(self, bridge: RuntimeBridge | None = None) -> None:
         self._bridge = bridge
+        self._suggester: CommandSuggester | None = None
+
+    def set_suggester(self, suggester: CommandSuggester) -> None:
+        """Set the suggester for dynamic completions."""
+        self._suggester = suggester
+
+    async def get_all_suggestions(self, value: str) -> list[SuggestionItem]:
+        """Get all matching suggestions for the current input.
+
+        Args:
+            value: Current input value
+
+        Returns:
+            List of matching suggestions with descriptions
+        """
+        suggestions: list[SuggestionItem] = []
+
+        # Handle slash commands
+        if value.startswith("/"):
+            suggestions = await self._get_command_suggestions(value)
+
+        # Handle @agent mentions
+        elif "@" in value:
+            suggestions = await self._get_agent_suggestions(value)
+
+        # Handle empty or regular text (show hints)
+        elif not value or value.strip() == "":
+            suggestions = self._get_hint_suggestions()
+
+        return suggestions
+
+    async def _get_command_suggestions(self, value: str) -> list[SuggestionItem]:
+        """Get command suggestions for slash command input."""
+        suggestions: list[SuggestionItem] = []
+        parts = value[1:].split()  # Remove leading /
+
+        # Get commands from suggester if available
+        commands = COMMANDS.copy()
+        if self._suggester:
+            try:
+                dyn_commands, _ = await self._suggester._get_commands()
+                commands.update(dyn_commands)
+            except Exception:
+                pass
+
+        if not parts or (len(parts) == 1 and not value.endswith(" ")):
+            # Completing command name
+            partial = parts[0].lower() if parts else ""
+            for name, spec in sorted(commands.items()):
+                if name.startswith(partial):
+                    desc = self._get_command_description(name)
+                    suggestions.append(SuggestionItem(f"/{name}", desc, "command"))
+                    # Also add aliases
+                    for alias in spec.aliases[:1]:  # Show first alias only
+                        if alias.startswith(partial) and alias != name:
+                            suggestions.append(
+                                SuggestionItem(f"/{alias}", f"(alias for /{name})", "alias")
+                            )
+        else:
+            # Completing subcommand/flag/arg
+            cmd_name = parts[0].lower()
+            if cmd_name in commands:
+                spec = commands[cmd_name]
+                partial = parts[-1] if len(parts) > 1 and not value.endswith(" ") else ""
+
+                # Subcommands
+                for sub in spec.subcommands:
+                    if sub.startswith(partial):
+                        suggestions.append(SuggestionItem(f"/{cmd_name} {sub}", "", "subcommand"))
+
+                # Flags
+                if partial.startswith("-") or value.endswith(" "):
+                    for flag in spec.flags:
+                        if flag.startswith(partial) or not partial:
+                            suggestions.append(SuggestionItem(flag, "", "flag"))
+
+        return suggestions[:10]  # Limit to 10
+
+    async def _get_agent_suggestions(self, value: str) -> list[SuggestionItem]:
+        """Get agent suggestions for @mention input."""
+        suggestions: list[SuggestionItem] = []
+
+        at_pos = value.rfind("@")
+        if at_pos == -1:
+            return suggestions
+
+        partial = value[at_pos + 1 :].split()[0] if value[at_pos + 1 :] else ""
+
+        # Get agents from suggester
+        agents: list[str] = []
+        if self._suggester:
+            try:
+                agents = await self._suggester._get_agents()
+            except Exception:
+                pass
+
+        for agent in sorted(agents):
+            if agent.lower().startswith(partial.lower()):
+                # Extract short description from agent name
+                parts = agent.split(":")
+                category = parts[0] if len(parts) > 1 else ""
+                suggestions.append(SuggestionItem(f"@{agent}", category, "agent"))
+
+        return suggestions[:10]
+
+    def _get_hint_suggestions(self) -> list[SuggestionItem]:
+        """Get hint suggestions for empty input."""
+        return [
+            SuggestionItem("/help", "Show available commands", "hint"),
+            SuggestionItem("/bundle list", "List available bundles", "hint"),
+            SuggestionItem("@foundation:explorer", "Explore codebase", "hint"),
+            SuggestionItem("@foundation:zen-architect", "Design & architecture", "hint"),
+        ]
+
+    def _get_command_description(self, cmd: str) -> str:
+        """Get description for a command."""
+        descriptions = {
+            "help": "Show available commands",
+            "bundle": "Manage bundles",
+            "agents": "List available agents",
+            "tools": "List available tools",
+            "session": "Session management",
+            "reset": "Reset current session",
+            "config": "Show configuration",
+            "status": "Show session status",
+            "clear": "Clear conversation",
+            "quit": "Exit the application",
+            "mode": "Set or toggle a mode",
+            "modes": "List available modes",
+            "save": "Save transcript",
+        }
+        return descriptions.get(cmd, "")
 
     def get_commands(self) -> list[tuple[str, str]]:
         """Get all commands with descriptions.

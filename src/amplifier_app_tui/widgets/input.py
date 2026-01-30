@@ -249,11 +249,12 @@ class InputZone(Static):
         items = []
         for cmd, desc in commands:
             if cmd.startswith(text.lower()):
+                # Include description in main text (suffix not supported)
+                display = f"{cmd}  [dim]{desc}[/dim]"
                 items.append(
                     DropdownItem(
-                        main=cmd,
+                        main=Content.from_markup(display),
                         prefix=Content.from_markup("[bold green]⌘[/] "),
-                        suffix=Content.from_markup(f" [dim]{desc}[/]"),
                     )
                 )
 

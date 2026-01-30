@@ -383,6 +383,26 @@ class RuntimeBridge:
             # Session started/resumed - could show session info
             pass
 
+        # Sub-session lifecycle (agent delegation via task tool)
+        elif event_type in ("session:fork", "session.fork"):
+            # A sub-agent is being spawned
+            child_id = data.get("child_id", "")
+            agent = data.get("agent", "unknown")
+            parent_tool_call_id = data.get("parent_tool_call_id", "")
+            logger.info(f"Sub-session fork: agent={agent}, child_id={child_id}")
+            # Start tracking this sub-session
+            self.app.start_sub_session(parent_tool_call_id, child_id, agent)
+
+        elif event_type in ("session:join", "session.join"):
+            # A sub-agent has completed
+            child_id = data.get("child_id", "")
+            agent = data.get("agent", "unknown")
+            parent_tool_call_id = data.get("parent_tool_call_id", "")
+            status = data.get("status", "success")
+            logger.info(f"Sub-session join: agent={agent}, status={status}")
+            # End tracking this sub-session
+            self.app.end_sub_session(parent_tool_call_id, status)
+
         # Tool events from runtime (tool:pre, tool:post format from amplifier-core)
         elif event_type in ("tool.pre", "tool:pre"):
             # Extract tool name - try multiple possible field names

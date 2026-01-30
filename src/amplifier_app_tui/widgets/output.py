@@ -312,6 +312,7 @@ class ToolCallBlock(Static):
         params: dict,
         result: str | None = None,
         status: str = "pending",
+        tool_call_id: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -319,6 +320,10 @@ class ToolCallBlock(Static):
         self.params = params
         self._result = result
         self._status = status
+        self._tool_call_id = tool_call_id
+        # Sub-session tracking for agent delegation
+        self._sub_session_id: str | None = None
+        self._sub_agent_name: str | None = None
 
     def compose(self) -> ComposeResult:
         icon = self.ICONS.get(self._status, "○")
@@ -372,6 +377,38 @@ class ToolCallBlock(Static):
         except Exception:
             if self.is_mounted:
                 self.mount(Static(f"{icon} {result}", classes="tool-result"))
+
+    def set_sub_session(self, session_id: str, agent_name: str) -> None:
+        """Mark this tool as running a sub-agent."""
+        self._sub_session_id = session_id
+        self._sub_agent_name = agent_name
+        self._status = "running"
+        self.remove_class("pending", "success", "error")
+        self.add_class("running")
+
+        # Update header to show sub-agent
+        try:
+            header = self.query_one(".tool-header", Static)
+            header.update(f"─ Tool: {self.tool_name} → {agent_name} ◐ ")
+        except Exception:
+            pass
+
+    def end_sub_session(self, status: str = "success") -> None:
+        """Mark sub-agent as complete."""
+        self._status = status
+        self.remove_class("pending", "running")
+        self.add_class(status)
+
+        # Update header
+        icon = self.ICONS.get(status, "●")
+        try:
+            header = self.query_one(".tool-header", Static)
+            if self._sub_agent_name:
+                header.update(f"─ Tool: {self.tool_name} → {self._sub_agent_name} {icon} ")
+            else:
+                header.update(f"─ Tool: {self.tool_name} {icon} ")
+        except Exception:
+            pass
 
 
 class InlineApprovalBlock(Static):
@@ -706,6 +743,31 @@ class OutputZone(ScrollableContainer):
         """Update an existing tool call block."""
         if block_id in self._tool_blocks:
             self._tool_blocks[block_id].update_result(result, status)
+
+    # -------------------------------------------------------------------------
+    # Sub-Sessions (agent delegation)
+    # -------------------------------------------------------------------------
+
+    def start_sub_session(self, parent_tool_call_id: str, session_id: str, agent_name: str) -> None:
+        """Start tracking a sub-session (spawned agent).
+
+        This updates the tool call block to show that a sub-agent is running.
+        """
+        # Find the tool call block by tool_call_id
+        for block in self._tool_blocks.values():
+            if hasattr(block, "_tool_call_id") and block._tool_call_id == parent_tool_call_id:
+                block.set_sub_session(session_id, agent_name)
+                return
+        # If no matching tool call found, add a system message
+        self.add_system_message(f"Sub-agent started: {agent_name}")
+
+    def end_sub_session(self, parent_tool_call_id: str, status: str = "success") -> None:
+        """End tracking a sub-session."""
+        # Find the tool call block and update its status
+        for block in self._tool_blocks.values():
+            if hasattr(block, "_sub_session_id") and block._sub_session_id:
+                block.end_sub_session(status)
+                return
 
     # -------------------------------------------------------------------------
     # Inline Approvals (for low-risk tools)

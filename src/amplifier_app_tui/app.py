@@ -457,6 +457,21 @@ class AmplifierTUI(App):
                 self.set_agent_state("idle")
 
     # -------------------------------------------------------------------------
+    # Output Methods - Sub-Sessions (agent delegation)
+    # -------------------------------------------------------------------------
+
+    def start_sub_session(self, parent_tool_call_id: str, session_id: str, agent_name: str) -> None:
+        """Start tracking a sub-session (spawned agent)."""
+        if output := self._get_output_zone():
+            output.start_sub_session(parent_tool_call_id, session_id, agent_name)
+            self.set_agent_state("executing")
+
+    def end_sub_session(self, parent_tool_call_id: str, status: str = "success") -> None:
+        """End tracking a sub-session."""
+        if output := self._get_output_zone():
+            output.end_sub_session(parent_tool_call_id, status)
+
+    # -------------------------------------------------------------------------
     # Output Methods - Inline Approvals (low-risk tools)
     # -------------------------------------------------------------------------
 

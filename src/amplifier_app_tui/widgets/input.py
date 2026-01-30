@@ -309,24 +309,17 @@ class InputZone(Static):
         self._update_suggestion_hint(event.suggestion, event.current_text)
 
     def _update_suggestion_hint(self, suggestion: str, current_text: str) -> None:
-        """Update the suggestion hint label with multiple suggestions if available."""
+        """Update the suggestion hint label."""
         hint = self.query_one("#suggestion-hint", Static)
         if suggestion and suggestion != current_text:
-            # Try to get all matching suggestions for richer hint
-            hint_text = f"Tab → {suggestion}"
-            if self._suggester and hasattr(self._suggester, "get_all_suggestions"):
-                all_suggestions = self._suggester.get_all_suggestions(current_text)
-                if len(all_suggestions) > 1:
-                    # Show first 3 suggestions with descriptions
-                    parts = []
-                    for s in all_suggestions[:3]:
-                        if s.description:
-                            parts.append(f"{s.value} ({s.description})")
-                        else:
-                            parts.append(s.value)
-                    if len(all_suggestions) > 3:
-                        parts.append(f"+{len(all_suggestions) - 3} more")
-                    hint_text = "Tab → " + " │ ".join(parts)
+            # Show the single inline completion - Tab accepts it
+            # The suggestion already contains the full completed text
+            completion_part = (
+                suggestion[len(current_text) :]
+                if suggestion.startswith(current_text)
+                else suggestion
+            )
+            hint_text = f"Tab → {completion_part}"
             hint.update(hint_text)
             hint.remove_class("hidden")
         else:

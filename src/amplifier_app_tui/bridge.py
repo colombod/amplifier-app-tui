@@ -314,35 +314,44 @@ class RuntimeBridge:
                 self.app.add_thinking(content)
             self.app.end_thinking()
 
-        elif event_type in ("tool_call_start", "tool.start", "tool_use.start", "tool.call"):
-            # Tool call started
-            tool_name = data.get("tool", data.get("name", "unknown"))
-            params = data.get("params", data.get("arguments", data.get("input", {})))
+        # Tool events - runtime maps tool:pre -> tool_call, tool:post -> tool_result
+        elif event_type in ("tool_call", "tool_call_start", "tool.start", "tool:pre"):
+            # Tool call started - runtime uses tool_name field
+            tool_name = data.get("tool_name") or data.get("tool") or data.get("name") or "unknown"
+            params = (
+                data.get("arguments")
+                or data.get("tool_input")
+                or data.get("params")
+                or data.get("input")
+                or {}
+            )
+            tool_call_id = data.get("tool_call_id", data.get("id", ""))
             tool_id = self.app.add_tool_call(tool_name, params, status="pending")
             self.app.set_agent_state("executing")
-            # Store tool_id for later updates
-            data["_tui_tool_id"] = tool_id
+            # Store for result matching
+            self._current_tool_id = tool_id
+            if tool_call_id:
+                self._tool_call_mapping[tool_call_id] = tool_id
 
-        elif event_type in (
-            "tool_call_complete",
-            "tool.complete",
-            "tool_use.complete",
-            "tool_result",
-            "tool.result",
-            "tool.completed",
-        ):
-            # Tool call completed successfully
-            tool_id = data.get("_tui_tool_id") or current_tool_id
-            result = data.get("result", data.get("output", data.get("content", "")))
+        elif event_type in ("tool_result", "tool_call_complete", "tool.complete", "tool:post"):
+            # Tool call completed - runtime uses output field
+            tool_call_id = data.get("tool_call_id", data.get("id", ""))
+            tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
+            result = data.get("output", data.get("result", ""))
+            if isinstance(result, dict):
+                result = result.get("output", str(result))
             if tool_id:
-                self.app.update_tool_call(tool_id, str(result), "success")
+                self.app.update_tool_call(tool_id, str(result)[:500], "success")
+            self.app.set_agent_state("generating")
 
-        elif event_type in ("tool_call_error", "tool.error", "tool_use.error"):
+        elif event_type in ("tool_error", "tool_call_error", "tool.error", "tool:error"):
             # Tool call failed
-            tool_id = data.get("_tui_tool_id") or current_tool_id
-            error = data.get("error", "Unknown error")
+            tool_call_id = data.get("tool_call_id", data.get("id", ""))
+            tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
+            error = data.get("error", data.get("message", "Unknown error"))
             if tool_id:
                 self.app.update_tool_call(tool_id, str(error), "error")
+            self.app.set_agent_state("generating")
 
         elif event_type == "approval_requested":
             # Approval needed for tool execution
@@ -358,10 +367,11 @@ class RuntimeBridge:
                 # Modal approval for high-risk tools
                 self.app.show_approval(tool_name, params, approval_id)
 
-        elif event_type == "todo_update":
-            # Todo list updated
-            todos = data.get("todos", [])
-            self.app.update_todos(todos)
+        elif event_type in ("todo_update", "todo:update"):
+            # Todo list updated - data contains the todos list
+            todos = data.get("todos", data.get("items", []))
+            if todos:
+                self.app.update_todos(todos)
 
         # Execution lifecycle events - provide visual feedback
         elif event_type == "execution.start":
@@ -402,47 +412,6 @@ class RuntimeBridge:
             logger.info(f"Sub-session join: agent={agent}, status={status}")
             # End tracking this sub-session
             self.app.end_sub_session(parent_tool_call_id, status)
-
-        # Tool events from runtime (tool:pre, tool:post format from amplifier-core)
-        elif event_type in ("tool.pre", "tool:pre"):
-            # Extract tool name - try multiple possible field names
-            tool_name = data.get("tool_name") or data.get("name") or data.get("tool") or "unknown"
-            # Extract tool input/params
-            tool_input = (
-                data.get("tool_input")
-                or data.get("input")
-                or data.get("params")
-                or data.get("arguments")
-                or {
-                    k: v
-                    for k, v in data.items()
-                    if k not in ("tool_name", "name", "tool", "tool_call_id", "id")
-                }
-            )
-            tool_call_id = data.get("tool_call_id", data.get("id", ""))
-            tool_id = self.app.add_tool_call(tool_name, tool_input, status="pending")
-            self.app.set_agent_state("executing")
-            # Store for result matching
-            self._current_tool_id = tool_id
-            if tool_call_id:
-                self._tool_call_mapping[tool_call_id] = tool_id
-
-        elif event_type in ("tool.post", "tool:post"):
-            tool_call_id = data.get("tool_call_id", data.get("id", ""))
-            result = data.get("result", data.get("output", {}))
-            output = result.get("output", "") if isinstance(result, dict) else str(result)
-            tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
-            if tool_id:
-                self.app.update_tool_call(tool_id, str(output)[:500], "success")
-            self.app.set_agent_state("generating")
-
-        elif event_type in ("tool.error", "tool:error"):
-            tool_call_id = data.get("tool_call_id", data.get("id", ""))
-            error = data.get("error", data.get("message", "Tool error"))
-            tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
-            if tool_id:
-                self.app.update_tool_call(tool_id, str(error), "error")
-            self.app.set_agent_state("generating")
 
         elif event_type == "agent_push":
             # Agent stack changed (sub-agent spawned)

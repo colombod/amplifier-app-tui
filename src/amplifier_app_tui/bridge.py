@@ -140,6 +140,8 @@ class RuntimeBridge:
             session_info = await self._client.session.create(bundle=self.config.bundle)
             self._session_id = session_info.session_id
             self._safe_app_call("set_session", self._session_id)
+            # Set bundle name for status bar display
+            self._safe_app_call("set_bundle_name", self.config.bundle)
 
             # Start event listener for uncorrelated events (approvals, etc.)
             self._event_task = asyncio.create_task(self._event_loop())
@@ -382,8 +384,10 @@ class RuntimeBridge:
             self.app.set_agent_state("idle")
 
         elif event_type == "result":
-            # Final result (for non-streaming commands)
-            pass  # Handled by caller
+            # Final result - extract turn count if available
+            turn = data.get("turn")
+            if turn is not None:
+                self._safe_app_call("set_turn_count", turn)
 
         else:
             # Unknown event type - log but don't crash

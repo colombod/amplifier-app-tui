@@ -21,16 +21,29 @@ class ConnectionIndicatorSmall(Static):
 
 
 class SessionInfo(Static):
-    """Session ID display."""
+    """Session info display with bundle and turn count."""
 
     session_id: reactive[str | None] = reactive(None)
+    bundle_name: reactive[str | None] = reactive(None)
+    turn_count: reactive[int] = reactive(0)
 
     def render(self) -> str:
+        parts = []
+
+        # Bundle name (most useful info)
+        if self.bundle_name:
+            parts.append(f"[cyan]{self.bundle_name}[/cyan]")
+
+        # Turn count
+        if self.turn_count > 0:
+            parts.append(f"turn:{self.turn_count}")
+
+        # Session ID (truncated)
         if self.session_id:
-            # Truncate long session IDs
-            display_id = self.session_id[:12] if len(self.session_id) > 12 else self.session_id
-            return f"session:{display_id}"
-        return "session:new"
+            display_id = self.session_id[-8:] if len(self.session_id) > 8 else self.session_id
+            parts.append(f"[dim]{display_id}[/dim]")
+
+        return " │ ".join(parts) if parts else "session:new"
 
 
 class RuntimeMode(Static):
@@ -135,10 +148,17 @@ class StatusBar(Static):
         mode: str,
         busy: bool,
         approval_pending: bool = False,
+        bundle_name: str | None = None,
+        turn_count: int = 0,
     ) -> None:
         """Update status bar with current state."""
         self.query_one("#conn-indicator", ConnectionIndicatorSmall).connected = connected
-        self.query_one("#session-info", SessionInfo).session_id = session_id
+
+        session_info = self.query_one("#session-info", SessionInfo)
+        session_info.session_id = session_id
+        session_info.bundle_name = bundle_name
+        session_info.turn_count = turn_count
+
         self.query_one("#runtime-mode", RuntimeMode).mode = mode
 
         busy_indicator = self.query_one("#busy-indicator", BusyIndicator)

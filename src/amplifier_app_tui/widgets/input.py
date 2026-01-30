@@ -309,11 +309,25 @@ class InputZone(Static):
         self._update_suggestion_hint(event.suggestion, event.current_text)
 
     def _update_suggestion_hint(self, suggestion: str, current_text: str) -> None:
-        """Update the suggestion hint label."""
+        """Update the suggestion hint label with multiple suggestions if available."""
         hint = self.query_one("#suggestion-hint", Static)
         if suggestion and suggestion != current_text:
-            # Show the completion preview
-            hint.update(f"Tab → {suggestion}")
+            # Try to get all matching suggestions for richer hint
+            hint_text = f"Tab → {suggestion}"
+            if self._suggester and hasattr(self._suggester, "get_all_suggestions"):
+                all_suggestions = self._suggester.get_all_suggestions(current_text)
+                if len(all_suggestions) > 1:
+                    # Show first 3 suggestions with descriptions
+                    parts = []
+                    for s in all_suggestions[:3]:
+                        if s.description:
+                            parts.append(f"{s.value} ({s.description})")
+                        else:
+                            parts.append(s.value)
+                    if len(all_suggestions) > 3:
+                        parts.append(f"+{len(all_suggestions) - 3} more")
+                    hint_text = "Tab → " + " │ ".join(parts)
+            hint.update(hint_text)
             hint.remove_class("hidden")
         else:
             hint.update("")

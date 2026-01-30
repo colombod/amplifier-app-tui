@@ -95,6 +95,9 @@ class AmplifierTUI(App):
         self._agent_stack: list[str] = ["amplifier"]
         self._pending_approval: dict | None = None
         self._agent_state = "idle"  # idle, thinking, generating, executing, error
+        # Session info
+        self._bundle_name: str | None = None
+        self._turn_count: int = 0
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -348,6 +351,16 @@ class AmplifierTUI(App):
         self._agent_stack = agents if agents else ["amplifier"]
         self._update_header()
 
+    def set_turn_count(self, turn: int) -> None:
+        """Update the turn count."""
+        self._turn_count = turn
+        self._update_status()
+
+    def set_bundle_name(self, name: str) -> None:
+        """Update the bundle name."""
+        self._bundle_name = name
+        self._update_status()
+
     def show_approval(self, tool: str, params: dict, approval_id: str) -> None:
         """Show approval panel for a tool request."""
         self._pending_approval = {
@@ -519,6 +532,8 @@ class AmplifierTUI(App):
             mode=self._transport_mode,
             busy=self._busy,
             approval_pending=self._pending_approval is not None,
+            bundle_name=self._bundle_name,
+            turn_count=self._turn_count,
         )
 
     def _handle_approval_response(self, choice: str) -> None:

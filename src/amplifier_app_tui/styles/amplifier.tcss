@@ -243,6 +243,40 @@ InputZone PromptInput:focus {
 }
 
 /* ============================================================================
+ * AUTOCOMPLETE DROPDOWN
+ * ============================================================================ */
+
+AutoComplete {
+    layer: overlay;
+}
+
+AutoComplete AutoCompleteList {
+    max-height: 12;
+    min-height: 4;
+    width: auto;
+    min-width: 50;
+    max-width: 80;
+    background: $surface;
+    border: solid $primary;
+    padding: 0;
+}
+
+AutoComplete AutoCompleteList > .option-list--option {
+    padding: 0 1;
+}
+
+AutoComplete AutoCompleteList > .option-list--option-highlighted {
+    background: $primary 30%;
+}
+
+InputZone .input-hint {
+    color: $text-muted;
+    text-style: italic;
+    padding-top: 0;
+    height: 1;
+}
+
+/* ============================================================================
  * STATUS BAR
  * ============================================================================ */
 

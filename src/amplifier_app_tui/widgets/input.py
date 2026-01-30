@@ -17,7 +17,39 @@ from textual.containers import Horizontal
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Input, Static
-from textual_autocomplete import AutoComplete, DropdownItem
+from textual_autocomplete import AutoComplete, DropdownItem, TargetState
+
+
+class SmartAutoComplete(AutoComplete):
+    """AutoComplete that uses item.id for completion value instead of item.main.
+
+    This allows displaying rich text (command + description) while only
+    inserting the command/agent name on Tab.
+    """
+
+    def apply_completion(self, value: str, state: TargetState) -> None:
+        """Override to use id field if available.
+
+        Args:
+            value: The default value (from main text)
+            state: Current input state
+        """
+        # Get the highlighted option to check for id
+        option_list = self.query_one("AutoCompleteList")
+        highlighted = option_list.highlighted
+        if highlighted is not None:
+            options = list(option_list._options)
+            if 0 <= highlighted < len(options):
+                option = options[highlighted]
+                # Use id if set, otherwise fall back to extracting command from value
+                if option.id:
+                    value = option.id
+                else:
+                    # Extract just the command/agent (before whitespace)
+                    value = value.split()[0] if value else value
+
+        super().apply_completion(value, state)
+
 
 if TYPE_CHECKING:
     from ..completions import CompletionProvider
@@ -208,15 +240,16 @@ class InputZone(Static):
             yield prompt_input
 
             # Add autocomplete dropdown attached to the input
+            # Use SmartAutoComplete which extracts command from id field
             if self._completion_provider:
-                yield AutoComplete(
+                yield SmartAutoComplete(
                     prompt_input,
                     candidates=self._completion_provider.get_candidates,
                     id="autocomplete",
                 )
             else:
                 # Static completions fallback
-                yield AutoComplete(
+                yield SmartAutoComplete(
                     prompt_input,
                     candidates=self._get_static_candidates,
                     id="autocomplete",
@@ -230,7 +263,8 @@ class InputZone(Static):
     def _get_static_candidates(self, state) -> list[DropdownItem]:
         """Fallback static candidates when no provider.
 
-        IMPORTANT: main is what gets inserted on Tab, so keep it clean.
+        Display: icon + command + description
+        Insert on Tab: just command (via SmartAutoComplete using id field)
         """
         try:
             from textual.content import Content
@@ -253,12 +287,14 @@ class InputZone(Static):
             items = []
             for cmd, desc in commands:
                 if cmd.startswith(text.lower()):
-                    # Description in prefix (left side), command in main (gets inserted)
-                    prefix = Content.from_markup(f"[bold green]⌘[/] [dim]{desc:<25}[/dim] ")
+                    prefix = Content.from_markup("[bold green]⌘[/] ")
+                    # Display: command (padded) + description
+                    display = f"{cmd:<18} [dim]{desc}[/dim]"
                     items.append(
                         DropdownItem(
-                            main=cmd,  # Just the command - this gets inserted
+                            main=Content.from_markup(display),
                             prefix=prefix,
+                            id=cmd,  # SmartAutoComplete uses this for insertion
                         )
                     )
 

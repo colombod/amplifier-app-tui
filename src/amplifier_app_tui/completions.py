@@ -183,7 +183,8 @@ class CompletionProvider:
     def _get_agent_completions(self, text: str) -> list[DropdownItem]:
         """Get agent completions for @mentions.
 
-        IMPORTANT: main text is what gets inserted, so it should be just @agent_name
+        Display: icon + @agent + (bundle)
+        Insert on Tab: just @agent (via SmartAutoComplete using id field)
         """
         agents = self._get_agents()
         items = []
@@ -195,29 +196,30 @@ class CompletionProvider:
                 # Parse agent name for display
                 if ":" in agent:
                     bundle, _name = agent.split(":", 1)
-                    description = f"from {bundle}"
+                    description = f"({bundle})"
                 else:
                     description = ""
 
-                # Main is ONLY @agent (what gets inserted on Tab)
-                # Description goes in prefix so it displays but doesn't get inserted
-                prefix_text = f"[bold cyan]{CATEGORY_ICONS['agent']}[/] "
-                if description:
-                    prefix_text = (
-                        f"[bold cyan]{CATEGORY_ICONS['agent']}[/] [dim]{description:<20}[/dim] "
-                    )
+                icon = CATEGORY_ICONS["agent"]
+                prefix = Content.from_markup(f"[bold cyan]{icon}[/] ")
+
+                # What gets inserted on Tab
+                completion_value = f"@{agent}"
+
+                # Display: @agent:name  (bundle) - padded for alignment
+                display = f"{completion_value:<35} [dim]{description}[/dim]"
 
                 items.append(
                     DropdownItem(
-                        main=f"@{agent}",  # Just the @agent - this gets inserted
-                        prefix=Content.from_markup(prefix_text),
+                        main=Content.from_markup(display),
+                        prefix=prefix,
+                        id=completion_value,  # SmartAutoComplete uses this for insertion
                     )
                 )
 
         # Sort by match quality
         def get_sort_key(item: DropdownItem) -> tuple:
-            main_str = str(item.main)
-            return (search not in main_str.lower()[: len(search) + 1], main_str)
+            return (search not in (item.id or "").lower(), item.id or "")
 
         items.sort(key=get_sort_key)
 
@@ -255,8 +257,8 @@ class CompletionProvider:
     def _make_command_item(self, cmd_info: CommandInfo) -> DropdownItem:
         """Create a DropdownItem for a command.
 
-        IMPORTANT: main text is what gets inserted on Tab, so it must be
-        just the command name, not the description.
+        IMPORTANT: main text is what gets inserted on Tab.
+        Display: icon + command + description (but only command is inserted)
         """
         icon = CATEGORY_ICONS.get(cmd_info.category, "⌘")
 
@@ -266,15 +268,15 @@ class CompletionProvider:
         else:
             prefix = Content.from_markup(f"[bold green]{icon}[/] ")
 
-        # Main is ONLY the command (this is what gets inserted on Tab)
-        # Description is included in prefix so it shows but doesn't get inserted
-        prefix_with_desc = Content.from_markup(
-            f"{prefix.plain} [dim]{cmd_info.description:<30}[/dim] "
-        )
+        # Main shows: "command  description" but value is extracted as just command
+        # We use a custom format where main has command padded, then dim description
+        padded_cmd = f"{cmd_info.name:<20}"
+        main_display = f"{padded_cmd} [dim]{cmd_info.description}[/dim]"
 
         return DropdownItem(
-            main=cmd_info.name,
-            prefix=prefix_with_desc,
+            main=Content.from_markup(main_display),
+            prefix=prefix,
+            id=cmd_info.name,  # Store actual command in id for potential use
         )
 
     def _get_agents(self) -> list[str]:

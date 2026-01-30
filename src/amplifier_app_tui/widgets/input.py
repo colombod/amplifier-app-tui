@@ -229,36 +229,40 @@ class InputZone(Static):
 
     def _get_static_candidates(self, state) -> list[DropdownItem]:
         """Fallback static candidates when no provider."""
-        from textual.content import Content
+        try:
+            from textual.content import Content
 
-        text = state.text.strip()
+            text = state.text.strip() if state.text else ""
 
-        if not text.startswith("/"):
-            return []
+            if not text.startswith("/"):
+                return []
 
-        # Basic command completions
-        commands = [
-            ("/help", "Show help information"),
-            ("/bundle", "Manage bundles"),
-            ("/bundle list", "List installed bundles"),
-            ("/reset", "Reset the session"),
-            ("/clear", "Clear the output"),
-            ("/quit", "Exit the application"),
-        ]
+            # Basic command completions
+            commands = [
+                ("/help", "Show help information"),
+                ("/bundle", "Manage bundles"),
+                ("/bundle list", "List installed bundles"),
+                ("/reset", "Reset the session"),
+                ("/clear", "Clear the output"),
+                ("/quit", "Exit the application"),
+            ]
 
-        items = []
-        for cmd, desc in commands:
-            if cmd.startswith(text.lower()):
-                # Include description in main text (suffix not supported)
-                display = f"{cmd}  [dim]{desc}[/dim]"
-                items.append(
-                    DropdownItem(
-                        main=Content.from_markup(display),
-                        prefix=Content.from_markup("[bold green]⌘[/] "),
+            items = []
+            for cmd, desc in commands:
+                if cmd.startswith(text.lower()):
+                    # Include description in main text (suffix not supported)
+                    display = f"{cmd}  [dim]{desc}[/dim]"
+                    items.append(
+                        DropdownItem(
+                            main=Content.from_markup(display),
+                            prefix=Content.from_markup("[bold green]⌘[/] "),
+                        )
                     )
-                )
 
-        return items
+            return items
+        except Exception:
+            # Fallback on any error
+            return []
 
     def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         """Handle input submission."""

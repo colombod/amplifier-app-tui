@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.css.query import NoMatches
 
 from .widgets.approval import ApprovalPanel
 from .widgets.header import AgentHeader
@@ -392,22 +393,29 @@ class AmplifierTUI(App):
     # Output Methods - Agent Responses
     # -------------------------------------------------------------------------
 
+    def _get_output_zone(self) -> OutputZone | None:
+        """Safely get output zone (returns None during shutdown)."""
+        try:
+            return self.query_one("#output-zone", OutputZone)
+        except NoMatches:
+            return None
+
     def start_response(self, agent_name: str | None = None) -> None:
         """Start a new agent response (call before streaming)."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.start_response(bundle_name=self._bundle_name, agent_name=agent_name)
-        self.set_agent_state("generating")
+        if output := self._get_output_zone():
+            output.start_response(bundle_name=self._bundle_name, agent_name=agent_name)
+            self.set_agent_state("generating")
 
     def append_content(self, content: str) -> None:
         """Append content to current response (for streaming)."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.append_content(content)
+        if output := self._get_output_zone():
+            output.append_content(content)
 
     def end_response(self) -> None:
         """End the current agent response."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.end_response()
-        self.set_agent_state("idle")
+        if output := self._get_output_zone():
+            output.end_response()
+            self.set_agent_state("idle")
 
     # -------------------------------------------------------------------------
     # Output Methods - Thinking
@@ -415,14 +423,14 @@ class AmplifierTUI(App):
 
     def add_thinking(self, content: str) -> None:
         """Add a thinking block to output."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.add_thinking(content)
-        self.set_agent_state("thinking")
+        if output := self._get_output_zone():
+            output.add_thinking(content)
+            self.set_agent_state("thinking")
 
     def end_thinking(self) -> None:
         """End thinking block."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.end_thinking()
+        if output := self._get_output_zone():
+            output.end_thinking()
 
     # -------------------------------------------------------------------------
     # Output Methods - Tool Calls
@@ -436,16 +444,17 @@ class AmplifierTUI(App):
         status: str = "pending",
     ) -> str:
         """Add a tool call block and return its ID for updates."""
-        output = self.query_one("#output-zone", OutputZone)
-        self.set_agent_state("executing")
-        return output.add_tool_call(tool_name, params, result, status)
+        if output := self._get_output_zone():
+            self.set_agent_state("executing")
+            return output.add_tool_call(tool_name, params, result, status)
+        return ""
 
     def update_tool_call(self, block_id: str, result: str, status: str) -> None:
         """Update an existing tool call block."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.update_tool_call(block_id, result, status)
-        if status in ("success", "error"):
-            self.set_agent_state("idle")
+        if output := self._get_output_zone():
+            output.update_tool_call(block_id, result, status)
+            if status in ("success", "error"):
+                self.set_agent_state("idle")
 
     # -------------------------------------------------------------------------
     # Output Methods - Inline Approvals (low-risk tools)
@@ -477,24 +486,24 @@ class AmplifierTUI(App):
 
     def add_error(self, error: str) -> None:
         """Add an error block to output."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.add_error(error)
-        self.set_agent_state("error")
+        if output := self._get_output_zone():
+            output.add_error(error)
+            self.set_agent_state("error")
 
     def add_system_message(self, message: str) -> None:
         """Add a system message to output."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.add_system_message(message)
+        if output := self._get_output_zone():
+            output.add_system_message(message)
 
     def add_command_output(self, content: str) -> None:
         """Add command output with preserved formatting (for /help, etc.)."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.add_command_output(content)
+        if output := self._get_output_zone():
+            output.add_command_output(content)
 
     def clear_output(self) -> None:
         """Clear the output zone."""
-        output = self.query_one("#output-zone", OutputZone)
-        output.clear()
+        if output := self._get_output_zone():
+            output.clear()
 
     def clear_conversation(self) -> None:
         """Clear the conversation (alias for clear_output)."""

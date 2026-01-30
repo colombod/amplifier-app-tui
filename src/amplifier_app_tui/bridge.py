@@ -383,24 +383,45 @@ class RuntimeBridge:
             # Session started/resumed - could show session info
             pass
 
-        # Tool events from runtime (tool:pre, tool:post format)
-        elif event_type == "tool.pre":
-            tool_name = data.get("tool_name", "unknown")
-            tool_input = data.get("tool_input", {})
-            tool_call_id = data.get("tool_call_id", "")
+        # Tool events from runtime (tool:pre, tool:post format from amplifier-core)
+        elif event_type in ("tool.pre", "tool:pre"):
+            # Extract tool name - try multiple possible field names
+            tool_name = data.get("tool_name") or data.get("name") or data.get("tool") or "unknown"
+            # Extract tool input/params
+            tool_input = (
+                data.get("tool_input")
+                or data.get("input")
+                or data.get("params")
+                or data.get("arguments")
+                or {
+                    k: v
+                    for k, v in data.items()
+                    if k not in ("tool_name", "name", "tool", "tool_call_id", "id")
+                }
+            )
+            tool_call_id = data.get("tool_call_id", data.get("id", ""))
             tool_id = self.app.add_tool_call(tool_name, tool_input, status="pending")
             self.app.set_agent_state("executing")
             # Store for result matching
             self._current_tool_id = tool_id
-            self._tool_call_mapping[tool_call_id] = tool_id
+            if tool_call_id:
+                self._tool_call_mapping[tool_call_id] = tool_id
 
-        elif event_type == "tool.post":
-            tool_call_id = data.get("tool_call_id", "")
-            result = data.get("result", {})
+        elif event_type in ("tool.post", "tool:post"):
+            tool_call_id = data.get("tool_call_id", data.get("id", ""))
+            result = data.get("result", data.get("output", {}))
             output = result.get("output", "") if isinstance(result, dict) else str(result)
             tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
             if tool_id:
-                self.app.update_tool_call(tool_id, output, "success")
+                self.app.update_tool_call(tool_id, str(output)[:500], "success")
+            self.app.set_agent_state("generating")
+
+        elif event_type in ("tool.error", "tool:error"):
+            tool_call_id = data.get("tool_call_id", data.get("id", ""))
+            error = data.get("error", data.get("message", "Tool error"))
+            tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
+            if tool_id:
+                self.app.update_tool_call(tool_id, str(error), "error")
             self.app.set_agent_state("generating")
 
         elif event_type == "agent_push":

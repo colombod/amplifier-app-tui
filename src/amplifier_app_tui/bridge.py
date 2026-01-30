@@ -511,6 +511,113 @@ class RuntimeBridge:
             logger.error(f"Failed to send approval: {e}")
             self.app.add_error(f"Failed to send approval: {e}")
 
+    # -------------------------------------------------------------------------
+    # Completion Data APIs - Used by CompletionProvider for autocomplete
+    # -------------------------------------------------------------------------
+
+    def get_available_agents(self) -> list[str]:
+        """Get list of available agent names for @completions.
+
+        Returns:
+            List of agent names (e.g., ["foundation:explorer", "amplifier:amplifier-expert"])
+        """
+        if not self.is_connected or not self._client:
+            return []
+
+        try:
+            # Use asyncio to run the async API call
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context, need to use a different approach
+                # Create a task and return empty for now, cache will be populated later
+                future = asyncio.ensure_future(self._fetch_agents())
+                if future.done():
+                    return future.result()
+                return []
+            else:
+                return loop.run_until_complete(self._fetch_agents())
+        except Exception as e:
+            logger.debug(f"Failed to get agents: {e}")
+            return []
+
+    async def _fetch_agents(self) -> list[str]:
+        """Async helper to fetch agents from runtime."""
+        try:
+            agents_data = await self._client.agents.list(self._session_id)
+            # Extract agent names from the response
+            return [agent.get("name", "") for agent in agents_data if agent.get("name")]
+        except Exception as e:
+            logger.debug(f"Failed to fetch agents: {e}")
+            return []
+
+    def get_available_tools(self) -> list[str]:
+        """Get list of available tool names for completions.
+
+        Returns:
+            List of tool names (e.g., ["bash", "read_file", "web_search"])
+        """
+        if not self.is_connected or not self._client:
+            return []
+
+        try:
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                future = asyncio.ensure_future(self._fetch_tools())
+                if future.done():
+                    return future.result()
+                return []
+            else:
+                return loop.run_until_complete(self._fetch_tools())
+        except Exception as e:
+            logger.debug(f"Failed to get tools: {e}")
+            return []
+
+    async def _fetch_tools(self) -> list[str]:
+        """Async helper to fetch tools from runtime."""
+        try:
+            tools_data = await self._client.tools.list(self._session_id)
+            # Extract tool names from the response
+            return [tool.get("name", "") for tool in tools_data if tool.get("name")]
+        except Exception as e:
+            logger.debug(f"Failed to fetch tools: {e}")
+            return []
+
+    def get_available_commands(self) -> dict[str, Any]:
+        """Get available slash commands from runtime.
+
+        Returns:
+            Dict of command info from runtime
+        """
+        if not self.is_connected or not self._client:
+            return {}
+
+        try:
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                future = asyncio.ensure_future(self._fetch_commands())
+                if future.done():
+                    return future.result()
+                return {}
+            else:
+                return loop.run_until_complete(self._fetch_commands())
+        except Exception as e:
+            logger.debug(f"Failed to get commands: {e}")
+            return {}
+
+    async def _fetch_commands(self) -> dict[str, Any]:
+        """Async helper to fetch commands from runtime."""
+        try:
+            return await self._client.slash_commands.list()
+        except Exception as e:
+            logger.debug(f"Failed to fetch commands: {e}")
+            return {}
+
     async def __aenter__(self) -> RuntimeBridge:
         await self.connect()
         return self

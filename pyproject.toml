@@ -27,6 +27,7 @@ classifiers = [
 dependencies = [
     "textual>=0.47.0",
     "rich>=13.0.0",
+    "textual-autocomplete>=3.0.0a0",
     "amplifier-app-runtime",
 ]
 

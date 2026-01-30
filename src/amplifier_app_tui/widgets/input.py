@@ -1,11 +1,10 @@
-"""Input zone widget for multi-line prompts.
+"""Input zone widget with autocomplete dropdown menu.
 
 Supports:
 - Multi-line input with Ctrl+J for new lines
 - Enter to submit
 - Command history navigation
-- Ghost text autocomplete for @agents, /commands, tool-*
-- Suggestions popup showing all matching options
+- Dropdown autocomplete for /commands, @agents, tools
 """
 
 from __future__ import annotations
@@ -17,29 +16,24 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.message import Message
 from textual.reactive import reactive
-from textual.widgets import Static, TextArea
+from textual.widgets import Input, Static
+from textual_autocomplete import AutoComplete, DropdownItem
 
 if TYPE_CHECKING:
-    from ..suggester import CommandSuggester
+    from ..completions import CompletionProvider
 
 
-class PromptTextArea(TextArea):
-    """Multi-line input with Ctrl+J for new lines, Enter to submit.
+class PromptInput(Input):
+    """Single-line input with Enter to submit, history navigation.
 
     Keyboard:
         Enter       - Submit the prompt
-        Ctrl+J      - Insert new line
-        Up/Down     - History navigation (when on first/last line)
-        Tab         - Accept ghost text suggestion
+        Up/Down     - History navigation
     """
 
     BINDINGS = [
-        Binding("enter", "submit", "Submit", show=False),
-        Binding("ctrl+j", "newline", "New line", show=False),
         Binding("up", "history_prev", "Previous", show=False),
         Binding("down", "history_next", "Next", show=False),
-        Binding("tab", "accept_suggestion", "Accept", show=False),
-        Binding("ctrl+space", "trigger_completion", "Complete", show=False),
     ]
 
     class Submitted(Message):
@@ -49,93 +43,29 @@ class PromptTextArea(TextArea):
             super().__init__()
             self.value = value
 
-    class SuggestionChanged(Message):
-        """Fired when autocomplete suggestion changes."""
-
-        def __init__(self, suggestion: str, current_text: str) -> None:
-            super().__init__()
-            self.suggestion = suggestion
-            self.current_text = current_text
-
-    def __init__(self, suggester: CommandSuggester | None = None, **kwargs) -> None:
-        super().__init__(
-            language=None,  # Plain text, no syntax highlighting
-            soft_wrap=True,
-            tab_behavior="focus",  # Tab doesn't insert, we handle it
-            **kwargs,
-        )
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._history: list[str] = []
         self._history_index = -1
         self._temp_value = ""
-        self._suggester = suggester
-        self._ghost_text = ""
 
-    def on_mount(self) -> None:
-        """Set up placeholder text styling."""
-        # TextArea doesn't have placeholder, we handle empty state in CSS
-        pass
-
-    def action_submit(self) -> None:
-        """Handle Enter key - submit the prompt."""
-        value = self.text.strip()
-        if value:
-            self.post_message(self.Submitted(value))
-
-    def action_newline(self) -> None:
-        """Handle Ctrl+J - insert a new line."""
-        self.insert("\n")
+    def _on_key(self, event) -> None:
+        """Handle key events - intercept Enter."""
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            value = self.value.strip()
+            if value:
+                self.post_message(self.Submitted(value))
+            return
 
     def action_history_prev(self) -> None:
         """Navigate to previous history item."""
-        # Only navigate history if cursor is on the first line
-        if self.cursor_location[0] == 0:
-            self._navigate_history(-1)
-        else:
-            # Default behavior - move cursor up
-            self.action_cursor_up()
+        self._navigate_history(-1)
 
     def action_history_next(self) -> None:
         """Navigate to next history item."""
-        # Only navigate history if cursor is on the last line
-        lines = self.text.split("\n")
-        if self.cursor_location[0] >= len(lines) - 1:
-            self._navigate_history(1)
-        else:
-            # Default behavior - move cursor down
-            self.action_cursor_down()
-
-    async def action_accept_suggestion(self) -> None:
-        """Accept the ghost text suggestion, or insert tab if no suggestion."""
-        if self._ghost_text and self._suggester:
-            # Get suggestion for current text
-            suggestion = await self._suggester.get_suggestion(self.text)
-            if suggestion:
-                self.text = suggestion
-                # Move cursor to end
-                self.cursor_location = (
-                    len(self.text.split("\n")) - 1,
-                    len(self.text.split("\n")[-1]),
-                )
-                self._ghost_text = ""
-                # Clear the suggestion hint
-                self.post_message(self.SuggestionChanged("", self.text))
-                self.refresh()
-                return
-
-        # No suggestion - insert tab as whitespace (4 spaces)
-        self.insert("    ")
-
-    async def action_trigger_completion(self) -> None:
-        """Manually trigger completion suggestions (Ctrl+Space)."""
-        if not self._suggester:
-            return
-
-        # Force fetch suggestion for current text
-        suggestion = await self._suggester.get_suggestion(self.text)
-        if suggestion and suggestion != self.text:
-            self._ghost_text = suggestion[len(self.text) :]
-            self.post_message(self.SuggestionChanged(self._ghost_text, self.text))
-            self.refresh()
+        self._navigate_history(1)
 
     def _navigate_history(self, direction: int) -> None:
         """Navigate through command history."""
@@ -144,7 +74,7 @@ class PromptTextArea(TextArea):
 
         # Save current input if starting navigation
         if self._history_index == -1:
-            self._temp_value = self.text
+            self._temp_value = self.value
 
         new_index = self._history_index + direction
 
@@ -156,10 +86,10 @@ class PromptTextArea(TextArea):
         self._history_index = new_index
 
         if new_index == -1:
-            self.text = self._temp_value
+            self.value = self._temp_value
         else:
             # History is newest-first, so reverse index
-            self.text = self._history[-(new_index + 1)]
+            self.value = self._history[-(new_index + 1)]
 
     def add_to_history(self, value: str) -> None:
         """Add a command to history."""
@@ -170,52 +100,31 @@ class PromptTextArea(TextArea):
 
     def clear(self) -> None:
         """Clear the input."""
-        self.text = ""
-        self._ghost_text = ""
-
-    async def _on_key(self, event) -> None:
-        """Handle key events - intercept Enter before TextArea's default handler."""
-        # Intercept Enter key BEFORE parent processes it (which would insert newline)
-        if event.key == "enter":
-            event.prevent_default()
-            event.stop()
-            self.action_submit()
-            return
-
-        # Let the key event process first for all other keys
-        await super()._on_key(event)
-
-        # Then update ghost text suggestion
-        if self._suggester and event.key not in ("tab", "escape"):
-            suggestion = await self._suggester.get_suggestion(self.text)
-            if suggestion and suggestion != self.text:
-                self._ghost_text = suggestion[len(self.text) :]
-                # Notify parent of suggestion change
-                self.post_message(self.SuggestionChanged(suggestion, self.text))
-            else:
-                if self._ghost_text:  # Only notify if suggestion cleared
-                    self._ghost_text = ""
-                    self.post_message(self.SuggestionChanged("", self.text))
+        self.value = ""
 
 
 class InputZone(Static):
-    """Multi-line input area for user prompts.
+    """Input area with dropdown autocomplete menu.
 
     ┃ Enter your prompt here...
-    ┃ Use Ctrl+J for new lines
-    ┃ Press Enter to send
+    ┌─────────────────────────────────┐
+    │ ⌘ /help      Show help          │
+    │ ⌘ /bundle    Manage bundles     │
+    │ → /bundle list  List bundles    │
+    └─────────────────────────────────┘
 
-    Supports:
-    - Multi-line editing with Ctrl+J
-    - Ghost text autocomplete
-    - Command history
+    Features:
+    - Dropdown menu appears as you type / or @
+    - Arrow keys navigate menu
+    - Enter/Tab selects completion
+    - Escape closes menu
     """
 
     DEFAULT_CSS = """
     InputZone {
         height: auto;
-        min-height: 4;
-        max-height: 12;
+        min-height: 3;
+        max-height: 15;
         border-top: solid $border;
         padding: 0 1;
     }
@@ -231,40 +140,48 @@ class InputZone(Static):
 
     InputZone .prompt-indicator {
         width: 2;
-        height: 100%;
+        height: 1;
         color: $primary;
     }
 
-    InputZone PromptTextArea {
+    InputZone PromptInput {
         width: 1fr;
-        min-height: 1;
-        max-height: 8;
         border: none;
         background: transparent;
         padding: 0;
     }
 
-    InputZone PromptTextArea:focus {
+    InputZone PromptInput:focus {
         border: none;
     }
-    
-    InputZone .suggestion-hint {
-        dock: bottom;
-        height: 1;
-        color: $text-muted;
-        text-style: italic;
-        padding-left: 2;
-    }
-    
-    InputZone .suggestion-hint.hidden {
-        display: none;
-    }
-    
+
     InputZone .input-hint {
         dock: bottom;
         height: 1;
         color: $text-muted;
         text-style: dim;
+    }
+
+    /* Autocomplete dropdown styling */
+    InputZone AutoComplete {
+        /* Position below the input */
+        margin-top: 1;
+    }
+
+    InputZone AutoComplete AutoCompleteList {
+        max-height: 8;
+        background: $surface;
+        border: solid $primary;
+        scrollbar-size: 1 1;
+    }
+
+    InputZone AutoComplete .autocomplete--highlight-match {
+        color: $success;
+        text-style: bold;
+    }
+
+    InputZone AutoComplete .option-list--option-highlighted {
+        background: $accent;
     }
     """
 
@@ -277,60 +194,92 @@ class InputZone(Static):
 
     disabled: reactive[bool] = reactive(False)
 
-    def __init__(self, suggester: CommandSuggester | None = None, **kwargs) -> None:
+    def __init__(self, completion_provider: CompletionProvider | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._suggester = suggester
+        self._completion_provider = completion_provider
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="input-container"):
             yield Static("┃ ", classes="prompt-indicator")
-            yield PromptTextArea(suggester=self._suggester, id="prompt-input")
-        yield Static("", id="suggestion-hint", classes="suggestion-hint hidden")
-        yield Static("Enter: send │ Ctrl+J: new line │ Tab: complete", classes="input-hint")
+            prompt_input = PromptInput(
+                placeholder="Enter prompt, /command, or @agent...",
+                id="prompt-input",
+            )
+            yield prompt_input
 
-    def on_prompt_text_area_submitted(self, event: PromptTextArea.Submitted) -> None:
+            # Add autocomplete dropdown attached to the input
+            if self._completion_provider:
+                yield AutoComplete(
+                    prompt_input,
+                    candidates=self._completion_provider.get_candidates,
+                    id="autocomplete",
+                )
+            else:
+                # Static completions fallback
+                yield AutoComplete(
+                    prompt_input,
+                    candidates=self._get_static_candidates,
+                    id="autocomplete",
+                )
+
+        yield Static(
+            "Enter: send │ ↑↓: history/menu │ Tab: complete │ Esc: close menu",
+            classes="input-hint",
+        )
+
+    def _get_static_candidates(self, state) -> list[DropdownItem]:
+        """Fallback static candidates when no provider."""
+        from textual.content import Content
+
+        text = state.text.strip()
+
+        if not text.startswith("/"):
+            return []
+
+        # Basic command completions
+        commands = [
+            ("/help", "Show help information"),
+            ("/bundle", "Manage bundles"),
+            ("/bundle list", "List installed bundles"),
+            ("/reset", "Reset the session"),
+            ("/clear", "Clear the output"),
+            ("/quit", "Exit the application"),
+        ]
+
+        items = []
+        for cmd, desc in commands:
+            if cmd.startswith(text.lower()):
+                items.append(
+                    DropdownItem(
+                        main=cmd,
+                        prefix=Content.from_markup("[bold green]⌘[/] "),
+                        suffix=Content.from_markup(f" [dim]{desc}[/]"),
+                    )
+                )
+
+        return items
+
+    def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         """Handle input submission."""
         value = event.value.strip()
         if value:
             # Add to history
-            prompt_input = self.query_one("#prompt-input", PromptTextArea)
+            prompt_input = self.query_one("#prompt-input", PromptInput)
             prompt_input.add_to_history(value)
             # Clear input
             prompt_input.clear()
-            # Clear suggestion hint
-            self._update_suggestion_hint("", "")
             # Post message to app
             self.post_message(self.PromptSubmitted(value))
 
-    def on_prompt_text_area_suggestion_changed(
-        self, event: PromptTextArea.SuggestionChanged
-    ) -> None:
-        """Handle suggestion changes - update the hint display."""
-        self._update_suggestion_hint(event.suggestion, event.current_text)
-
-    def _update_suggestion_hint(self, suggestion: str, current_text: str) -> None:
-        """Update the suggestion hint label."""
-        hint = self.query_one("#suggestion-hint", Static)
-        if suggestion and suggestion != current_text:
-            # Show the single inline completion - Tab accepts it
-            # The suggestion already contains the full completed text
-            completion_part = (
-                suggestion[len(current_text) :]
-                if suggestion.startswith(current_text)
-                else suggestion
-            )
-            hint_text = f"Tab → {completion_part}"
-            hint.update(hint_text)
-            hint.remove_class("hidden")
-        else:
-            hint.update("")
-            hint.add_class("hidden")
-
-    def set_suggester(self, suggester: CommandSuggester) -> None:
-        """Set the command suggester for autocomplete."""
-        self._suggester = suggester
-        prompt_input = self.query_one("#prompt-input", PromptTextArea)
-        prompt_input._suggester = suggester
+    def set_completion_provider(self, provider: CompletionProvider) -> None:
+        """Set the completion provider for autocomplete."""
+        self._completion_provider = provider
+        # Update the autocomplete if it exists
+        try:
+            autocomplete = self.query_one("#autocomplete", AutoComplete)
+            autocomplete._get_candidates = provider.get_candidates
+        except Exception:
+            pass
 
     def set_disabled(self, disabled: bool) -> None:
         """Enable or disable the input zone."""
@@ -340,17 +289,21 @@ class InputZone(Static):
         else:
             self.remove_class("disabled")
 
-        prompt_input = self.query_one("#prompt-input", PromptTextArea)
+        prompt_input = self.query_one("#prompt-input", PromptInput)
         prompt_input.disabled = disabled
 
     def get_value(self) -> str:
         """Get current input value."""
-        return self.query_one("#prompt-input", PromptTextArea).text
+        return self.query_one("#prompt-input", PromptInput).value
 
     def set_value(self, value: str) -> None:
         """Set input value."""
-        self.query_one("#prompt-input", PromptTextArea).text = value
+        self.query_one("#prompt-input", PromptInput).value = value
 
     def clear(self) -> None:
         """Clear the input."""
-        self.query_one("#prompt-input", PromptTextArea).clear()
+        self.query_one("#prompt-input", PromptInput).clear()
+
+    def focus_input(self) -> None:
+        """Focus the input field."""
+        self.query_one("#prompt-input", PromptInput).focus()

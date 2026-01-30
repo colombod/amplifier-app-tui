@@ -29,7 +29,7 @@ from .widgets.todos import TodoPanel
 if TYPE_CHECKING:
     from .bridge import RuntimeBridge
     from .commands import CommandHandler
-    from .suggester import CommandSuggester
+    from .completions import CompletionProvider
 
 
 class AmplifierTUI(App):
@@ -86,8 +86,8 @@ class AmplifierTUI(App):
         self._bridge = bridge
         # Command handler (initialized when bridge is set)
         self._command_handler: CommandHandler | None = None
-        # Command suggester for autocomplete
-        self._suggester: CommandSuggester | None = None
+        # Completion provider for autocomplete dropdown
+        self._completion_provider: CompletionProvider | None = None
         # State
         self._connected = False
         self._busy = False
@@ -122,11 +122,11 @@ class AmplifierTUI(App):
         self._update_status()
         # Apply initial responsive layout
         self._apply_responsive_layout()
-        # Set suggester if bridge was set before mount (timing fix)
-        if self._suggester:
+        # Set completion provider if bridge was set before mount (timing fix)
+        if self._completion_provider:
             try:
                 input_zone = self.query_one("#input-zone", InputZone)
-                input_zone.set_suggester(self._suggester)
+                input_zone.set_completion_provider(self._completion_provider)
             except Exception:
                 pass
 
@@ -251,18 +251,18 @@ class AmplifierTUI(App):
     def set_bridge(self, bridge: RuntimeBridge) -> None:
         """Set the runtime bridge and initialize command support."""
         from .commands import CommandHandler
-        from .suggester import CommandSuggester
+        from .completions import CompletionProvider
 
         self._bridge = bridge
         self._command_handler = CommandHandler(self, bridge)
 
-        # Create and set up the command suggester for autocomplete
-        self._suggester = CommandSuggester(bridge)
+        # Create and set up the completion provider for autocomplete dropdown
+        self._completion_provider = CompletionProvider(bridge)
 
-        # Update the input zone with the suggester (if mounted)
+        # Update the input zone with the completion provider (if mounted)
         try:
             input_zone = self.query_one("#input-zone", InputZone)
-            input_zone.set_suggester(self._suggester)
+            input_zone.set_completion_provider(self._completion_provider)
         except Exception:
             pass  # App may not be fully mounted yet
 

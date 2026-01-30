@@ -4,9 +4,19 @@ Maps runtime events to TUI methods using the transport-aware SDK client.
 Supports both subprocess (stdio) and attach (HTTP/WebSocket) modes.
 
 Architecture:
-    TUI <-> RuntimeBridge <-> TransportAmplifierClient <-> Runtime
-                                      |
-                           StdioTransport | HTTPTransport | WebSocketTransport
+    TUI <-> RuntimeBridge <-> EventRouter <-> Processors
+                 |
+    TransportAmplifierClient <-> Runtime
+             |
+    StdioTransport | HTTPTransport | WebSocketTransport
+
+The EventRouter dispatches events to specialized processors:
+- ContentProcessor: streaming text and thinking blocks
+- ToolProcessor: tool calls and results
+- TodoProcessor: todo list updates
+- AgentProcessor: sub-session/agent delegation
+- ApprovalProcessor: approval requests
+- SessionProcessor: session lifecycle
 """
 
 from __future__ import annotations
@@ -23,6 +33,8 @@ from amplifier_app_runtime.sdk import (
     create_subprocess_client,
 )
 from amplifier_app_runtime.sdk.types import MessagePart
+
+from .processors import EventRouter
 
 if TYPE_CHECKING:
     from .app import AmplifierTUI
@@ -84,7 +96,11 @@ class RuntimeBridge:
         self._event_task: asyncio.Task[None] | None = None
         self._prompt_task: asyncio.Task[None] | None = None
         self._connected = False
-        # Tool call tracking
+
+        # Event router for clean event processing
+        self._router = EventRouter(app)
+
+        # Tool call tracking (maps runtime tool_call_id -> UI block_id)
         self._current_tool_id: str | None = None
         self._tool_call_mapping: dict[str, str] = {}
 
@@ -260,192 +276,191 @@ class RuntimeBridge:
     async def _handle_event(self, event: Any, current_tool_id: str | None = None) -> None:
         """Handle a single event from the runtime.
 
-        Event type mapping:
-            content_delta     -> app.append_content()
-            thinking_start    -> app.add_thinking()
-            thinking_delta    -> app.add_thinking() (append)
-            thinking_end      -> app.end_thinking()
-            tool_call_start   -> app.add_tool_call()
-            tool_call_complete -> app.update_tool_call()
-            tool_call_error   -> app.update_tool_call()
-            approval_requested -> app.show_approval() or app.add_inline_approval()
-            todo_update       -> app.update_todos()
-            error             -> app.add_error()
-            done              -> (handled by caller)
+        Routes events through the EventRouter to specialized processors.
+        Some events require bridge-level handling (tool ID mapping, agent state).
         """
         event_type = event.type
         data = event.data or {}
 
         logger.debug(f"Event: {event_type} - {data}")
 
-        # Content events (runtime uses dot notation: content.start, content.delta, content.end)
+        # Special handling for tool events - we need to track UI block IDs
+        if event_type in ("tool_call", "tool_call_start", "tool.start", "tool:pre"):
+            self._handle_tool_call_start(data)
+            return
+
+        if event_type in ("tool_result", "tool_call_complete", "tool.complete", "tool:post"):
+            self._handle_tool_call_complete(data)
+            return
+
+        if event_type in ("tool_error", "tool_call_error", "tool.error", "tool:error"):
+            self._handle_tool_call_error(data)
+            return
+
+        # Route through the EventRouter for standard event processing
+        result = self._router.route(event_type, data)
+
+        if result.handled:
+            # Handle any state changes signaled by processors
+            if result.new_state:
+                self._safe_app_call("set_agent_state", result.new_state)
+            return
+
+        # Fallback handling for events not covered by processors
+        self._handle_fallback_event(event_type, data)
+
+    def _handle_tool_call_start(self, data: dict[str, Any]) -> None:
+        """Handle tool call start with UI block ID tracking."""
+        tool_name = data.get("tool_name") or data.get("tool") or data.get("name") or "unknown"
+        params = (
+            data.get("arguments")
+            or data.get("tool_input")
+            or data.get("params")
+            or data.get("input")
+            or {}
+        )
+        tool_call_id = data.get("tool_call_id", data.get("id", ""))
+
+        # Add to UI and get block ID
+        tool_id = self.app.add_tool_call(tool_name, params, status="pending")
+        self.app.set_agent_state("executing")
+
+        # Store mapping for result matching
+        self._current_tool_id = tool_id
+        if tool_call_id:
+            self._tool_call_mapping[tool_call_id] = tool_id
+
+        # Also route to tool processor for state tracking
+        self._router.route("tool_call", {**data, "ui_block_id": tool_id})
+
+    def _handle_tool_call_complete(self, data: dict[str, Any]) -> None:
+        """Handle tool call completion with UI block update."""
+        tool_call_id = data.get("tool_call_id", data.get("id", ""))
+        tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
+        result = data.get("output", data.get("result", ""))
+
+        if isinstance(result, dict):
+            result = result.get("output", str(result))
+
+        if tool_id:
+            self.app.update_tool_call(tool_id, str(result)[:500], "success")
+
+        self.app.set_agent_state("generating")
+
+        # Route to processor for state tracking
+        self._router.route("tool_result", {**data, "ui_block_id": tool_id})
+
+    def _handle_tool_call_error(self, data: dict[str, Any]) -> None:
+        """Handle tool call error with UI block update."""
+        tool_call_id = data.get("tool_call_id", data.get("id", ""))
+        tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
+        error = data.get("error", data.get("message", "Unknown error"))
+
+        if tool_id:
+            self.app.update_tool_call(tool_id, str(error), "error")
+
+        self.app.set_agent_state("generating")
+
+        # Route to processor for state tracking
+        self._router.route("tool_error", {**data, "ui_block_id": tool_id})
+
+    def _handle_fallback_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Handle events not covered by processors."""
+        # Content streaming (direct to app for now)
         if event_type in ("content_delta", "content.delta"):
-            # Streaming text content
             content = data.get("content", data.get("delta", ""))
             if content:
                 self.app.append_content(content)
 
         elif event_type == "content.start":
-            # Content block starting - start a response block
-            # Check if this is for a specific agent
             agent_name = data.get("agent_name")
             self._safe_app_call("start_response", agent_name)
 
         elif event_type == "content.end":
-            # Content block complete - may contain full content if not streaming
             content = data.get("content", "")
             if content:
                 self.app.append_content(content)
 
+        # Thinking events
         elif event_type in ("thinking_start", "thinking.start", "thinking:start"):
-            # Agent started thinking
             self.app.set_agent_state("thinking")
 
         elif event_type in ("thinking_delta", "thinking.delta", "thinking:delta"):
-            # Thinking content (usually collapsed)
             content = data.get("content", data.get("delta", ""))
             if content:
                 self.app.add_thinking(content)
 
         elif event_type in ("thinking_end", "thinking.end", "thinking:end", "thinking:final"):
-            # Thinking complete
             content = data.get("content", "")
             if content:
                 self.app.add_thinking(content)
             self.app.end_thinking()
 
-        # Tool events - runtime maps tool:pre -> tool_call, tool:post -> tool_result
-        elif event_type in ("tool_call", "tool_call_start", "tool.start", "tool:pre"):
-            # Tool call started - runtime uses tool_name field
-            tool_name = data.get("tool_name") or data.get("tool") or data.get("name") or "unknown"
-            params = (
-                data.get("arguments")
-                or data.get("tool_input")
-                or data.get("params")
-                or data.get("input")
-                or {}
-            )
-            tool_call_id = data.get("tool_call_id", data.get("id", ""))
-            tool_id = self.app.add_tool_call(tool_name, params, status="pending")
-            self.app.set_agent_state("executing")
-            # Store for result matching
-            self._current_tool_id = tool_id
-            if tool_call_id:
-                self._tool_call_mapping[tool_call_id] = tool_id
-
-        elif event_type in ("tool_result", "tool_call_complete", "tool.complete", "tool:post"):
-            # Tool call completed - runtime uses output field
-            tool_call_id = data.get("tool_call_id", data.get("id", ""))
-            tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
-            result = data.get("output", data.get("result", ""))
-            if isinstance(result, dict):
-                result = result.get("output", str(result))
-            if tool_id:
-                self.app.update_tool_call(tool_id, str(result)[:500], "success")
-            self.app.set_agent_state("generating")
-
-        elif event_type in ("tool_error", "tool_call_error", "tool.error", "tool:error"):
-            # Tool call failed
-            tool_call_id = data.get("tool_call_id", data.get("id", ""))
-            tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
-            error = data.get("error", data.get("message", "Unknown error"))
-            if tool_id:
-                self.app.update_tool_call(tool_id, str(error), "error")
-            self.app.set_agent_state("generating")
-
+        # Approval events
         elif event_type == "approval_requested":
-            # Approval needed for tool execution
             tool_name = data.get("tool", "unknown")
             params = data.get("params", {})
             approval_id = data.get("approval_id", "")
             risk_level = data.get("risk_level", "high")
 
             if risk_level == "low":
-                # Inline approval for low-risk tools
                 self.app.add_inline_approval(tool_name, params, approval_id)
             else:
-                # Modal approval for high-risk tools
                 self.app.show_approval(tool_name, params, approval_id)
 
+        # Todo events - route to processor
         elif event_type in ("todo_update", "todo:update"):
-            # Todo list updated - data contains the todos list
-            todos = data.get("todos", data.get("items", []))
-            if todos:
-                self.app.update_todos(todos)
+            self._router.route(event_type, data)
 
-        # Execution lifecycle events - provide visual feedback
+        # Execution lifecycle events
         elif event_type == "execution.start":
             self.app.set_agent_state("thinking")
 
         elif event_type in ("provider.request", "llm.request"):
-            # Model is processing - show thinking state
             self.app.set_agent_state("thinking")
 
         elif event_type in ("llm.response", "provider.response"):
-            # Response received - switch to generating state
             self.app.set_agent_state("generating")
 
         elif event_type in ("execution.end", "orchestrator.complete"):
-            # Execution complete
             self.app.set_agent_state("idle")
 
-        elif event_type == "session.start":
-            # Session started/resumed - could show session info
-            pass
-
-        # Sub-session lifecycle (agent delegation via task tool)
-        elif event_type in ("session:fork", "session.fork"):
-            # A sub-agent is being spawned
-            child_id = data.get("child_id", "")
-            agent = data.get("agent", "unknown")
-            parent_tool_call_id = data.get("parent_tool_call_id", "")
-            logger.info(f"Sub-session fork: agent={agent}, child_id={child_id}")
-            # Start tracking this sub-session
-            self.app.start_sub_session(parent_tool_call_id, child_id, agent)
+        # Sub-session lifecycle - route to agent processor
+        elif event_type in ("session:fork", "session.fork", "session_fork"):
+            self._router.route("session_fork", data)
 
         elif event_type in ("session:join", "session.join"):
-            # A sub-agent has completed
-            child_id = data.get("child_id", "")
-            agent = data.get("agent", "unknown")
             parent_tool_call_id = data.get("parent_tool_call_id", "")
             status = data.get("status", "success")
-            logger.info(f"Sub-session join: agent={agent}, status={status}")
-            # End tracking this sub-session
             self.app.end_sub_session(parent_tool_call_id, status)
 
         elif event_type == "agent_push":
-            # Agent stack changed (sub-agent spawned)
             agents = data.get("agents", data.get("stack", []))
             self.app.set_agent_stack(agents)
 
         elif event_type == "agent_pop":
-            # Agent returned
             agents = data.get("agents", data.get("stack", []))
             self.app.set_agent_stack(agents)
 
+        # Error and lifecycle events
         elif event_type == "error":
-            # Error occurred
             error = data.get("error", data.get("message", "Unknown error"))
             self.app.add_error(str(error))
             self.app.set_agent_state("error")
 
         elif event_type == "done":
-            # Request complete
             self.app.set_agent_state("idle")
 
         elif event_type == "cancelled":
-            # Request was cancelled
             self.app.add_system_message("Request cancelled")
             self.app.set_agent_state("idle")
 
         elif event_type == "result":
-            # Final result - extract turn count if available
             turn = data.get("turn")
             if turn is not None:
                 self._safe_app_call("set_turn_count", turn)
 
         else:
-            # Unknown event type - log but don't crash
             logger.debug(f"Unhandled event type: {event_type}")
 
     async def _event_loop(self) -> None:

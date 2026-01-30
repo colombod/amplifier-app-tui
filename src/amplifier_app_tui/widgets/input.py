@@ -207,23 +207,23 @@ class InputZone(Static):
             )
             yield prompt_input
 
-            # Add autocomplete dropdown attached to the input
-            if self._completion_provider:
-                yield AutoComplete(
-                    prompt_input,
-                    candidates=self._completion_provider.get_candidates,
-                    id="autocomplete",
-                )
-            else:
-                # Static completions fallback
-                yield AutoComplete(
-                    prompt_input,
-                    candidates=self._get_static_candidates,
-                    id="autocomplete",
-                )
+            # TODO: Re-enable autocomplete once textual-autocomplete issues resolved
+            # For now, skip autocomplete to avoid crashes
+            # if self._completion_provider:
+            #     yield AutoComplete(
+            #         prompt_input,
+            #         candidates=self._completion_provider.get_candidates,
+            #         id="autocomplete",
+            #     )
+            # else:
+            #     yield AutoComplete(
+            #         prompt_input,
+            #         candidates=self._get_static_candidates,
+            #         id="autocomplete",
+            #     )
 
         yield Static(
-            "Enter: send │ ↑↓: history/menu │ Tab: complete │ Esc: close menu",
+            "Enter: send │ ↑↓: history",
             classes="input-hint",
         )
 

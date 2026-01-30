@@ -100,14 +100,31 @@ class AgentResponseBlock(Vertical):
 
     streaming: reactive[bool] = reactive(False)
 
-    def __init__(self, timestamp: datetime | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        timestamp: datetime | None = None,
+        agent_name: str | None = None,
+        bundle_name: str | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._timestamp = timestamp or datetime.now()
         self._content_widget: RichLog | None = None
+        self._agent_name = agent_name
+        self._bundle_name = bundle_name
 
     def compose(self) -> ComposeResult:
         time_str = self._timestamp.strftime("%H:%M")
-        yield Static(f"─ Agent {' ' * 38} {time_str} ─", classes="agent-header")
+        # Build header with agent/bundle info
+        if self._agent_name and self._bundle_name:
+            agent_display = f"[cyan]{self._bundle_name}[/cyan]:[bold]{self._agent_name}[/bold]"
+        elif self._bundle_name:
+            agent_display = f"[cyan]{self._bundle_name}[/cyan]"
+        elif self._agent_name:
+            agent_display = f"[bold]{self._agent_name}[/bold]"
+        else:
+            agent_display = "Agent"
+        yield Static(f"─ {agent_display} {' ' * 30} {time_str} ─", classes="agent-header")
         self._content_widget = RichLog(
             id="agent-content",
             highlight=True,
@@ -615,9 +632,9 @@ class OutputZone(ScrollableContainer):
     # Agent Responses
     # -------------------------------------------------------------------------
 
-    def start_response(self) -> None:
+    def start_response(self, bundle_name: str | None = None, agent_name: str | None = None) -> None:
         """Start a new agent response block."""
-        self._current_response = AgentResponseBlock()
+        self._current_response = AgentResponseBlock(bundle_name=bundle_name, agent_name=agent_name)
         self._current_response.set_streaming(True)
         self.mount(self._current_response)
         self._is_streaming = True

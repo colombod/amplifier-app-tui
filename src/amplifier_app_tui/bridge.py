@@ -84,6 +84,9 @@ class RuntimeBridge:
         self._event_task: asyncio.Task[None] | None = None
         self._prompt_task: asyncio.Task[None] | None = None
         self._connected = False
+        # Tool call tracking
+        self._current_tool_id: str | None = None
+        self._tool_call_mapping: dict[str, str] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -283,8 +286,10 @@ class RuntimeBridge:
                 self.app.append_content(content)
 
         elif event_type == "content.start":
-            # Content block starting
-            pass  # Just marks the start, content comes in delta/end
+            # Content block starting - start a response block
+            # Check if this is for a specific agent
+            agent_name = data.get("agent_name")
+            self._safe_app_call("start_response", agent_name)
 
         elif event_type == "content.end":
             # Content block complete - may contain full content if not streaming
@@ -357,6 +362,46 @@ class RuntimeBridge:
             # Todo list updated
             todos = data.get("todos", [])
             self.app.update_todos(todos)
+
+        # Execution lifecycle events - provide visual feedback
+        elif event_type == "execution.start":
+            self.app.set_agent_state("thinking")
+
+        elif event_type in ("provider.request", "llm.request"):
+            # Model is processing - show thinking state
+            self.app.set_agent_state("thinking")
+
+        elif event_type in ("llm.response", "provider.response"):
+            # Response received - switch to generating state
+            self.app.set_agent_state("generating")
+
+        elif event_type in ("execution.end", "orchestrator.complete"):
+            # Execution complete
+            self.app.set_agent_state("idle")
+
+        elif event_type == "session.start":
+            # Session started/resumed - could show session info
+            pass
+
+        # Tool events from runtime (tool:pre, tool:post format)
+        elif event_type == "tool.pre":
+            tool_name = data.get("tool_name", "unknown")
+            tool_input = data.get("tool_input", {})
+            tool_call_id = data.get("tool_call_id", "")
+            tool_id = self.app.add_tool_call(tool_name, tool_input, status="pending")
+            self.app.set_agent_state("executing")
+            # Store for result matching
+            self._current_tool_id = tool_id
+            self._tool_call_mapping[tool_call_id] = tool_id
+
+        elif event_type == "tool.post":
+            tool_call_id = data.get("tool_call_id", "")
+            result = data.get("result", {})
+            output = result.get("output", "") if isinstance(result, dict) else str(result)
+            tool_id = self._tool_call_mapping.get(tool_call_id, self._current_tool_id)
+            if tool_id:
+                self.app.update_tool_call(tool_id, output, "success")
+            self.app.set_agent_state("generating")
 
         elif event_type == "agent_push":
             # Agent stack changed (sub-agent spawned)

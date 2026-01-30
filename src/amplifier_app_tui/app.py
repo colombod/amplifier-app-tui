@@ -392,10 +392,10 @@ class AmplifierTUI(App):
     # Output Methods - Agent Responses
     # -------------------------------------------------------------------------
 
-    def start_response(self) -> None:
+    def start_response(self, agent_name: str | None = None) -> None:
         """Start a new agent response (call before streaming)."""
         output = self.query_one("#output-zone", OutputZone)
-        output.start_response()
+        output.start_response(bundle_name=self._bundle_name, agent_name=agent_name)
         self.set_agent_state("generating")
 
     def append_content(self, content: str) -> None:

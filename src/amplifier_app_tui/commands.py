@@ -509,6 +509,8 @@ class CommandHandler:
                     new_bundle = event.data.get("bundle")
                     # Update the bridge with new session
                     self.bridge._session_id = new_session_id
+                    # Refresh completion data (agents/tools may have changed with new bundle)
+                    await self.bridge.refresh_completion_data()
                     return CommandResponse(
                         result=CommandResult.SUCCESS,
                         message=f"✓ Session reset!\n  New session: {new_session_id}\n  Bundle: {new_bundle}",

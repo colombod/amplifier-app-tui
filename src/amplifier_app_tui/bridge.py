@@ -127,6 +127,58 @@ class RuntimeBridge:
         """Current session ID."""
         return self._session_id
 
+    async def _find_or_create_session(self) -> Any:
+        """Find an existing session to reuse, or create a new one.
+
+        Looks for sessions that match:
+        - Same bundle (if specified)
+        - Same working directory (if specified)
+        - Active state (not completed/aborted)
+
+        Returns:
+            SessionInfo for the session to use
+        """
+        try:
+            # List existing sessions
+            sessions = await self._client.session.list()
+
+            # Filter for compatible sessions
+            for session in sessions:
+                # Skip if session is not active
+                state = getattr(session, "state", "").lower()
+                if state in ("completed", "aborted", "error"):
+                    continue
+
+                # Check bundle match (if we care about bundle)
+                if self.config.bundle:
+                    session_bundle = getattr(session, "bundle", None)
+                    if session_bundle != self.config.bundle:
+                        continue
+
+                # Check working directory match (if we care about it)
+                if self.config.working_directory:
+                    session_cwd = getattr(session, "cwd", None)
+                    if session_cwd != self.config.working_directory:
+                        continue
+
+                # Found a compatible session - reuse it
+                logger.info(f"Reusing existing session: {session.session_id}")
+                self._safe_app_call(
+                    "add_system_message",
+                    f"Reusing existing session: {session.session_id[:8]}...",
+                )
+                return session
+
+        except Exception as e:
+            logger.debug(f"Could not list sessions for reuse: {e}")
+
+        # No compatible session found - create a new one
+        logger.info("Creating new session")
+        return await self._client.session.create(
+            bundle=self.config.bundle,
+            working_directory=self.config.working_directory,
+        )
+
     async def connect(self) -> None:
         """Connect to the runtime and create a session."""
         if self._connected:
@@ -160,12 +212,13 @@ class RuntimeBridge:
             # Update TUI state
             self._safe_app_call("set_connected", True, self.config.mode.value)
 
-            # Create a session with the configured bundle
-            session_info = await self._client.session.create(bundle=self.config.bundle)
+            # Try to find and reuse an existing session
+            session_info = await self._find_or_create_session()
             self._session_id = session_info.session_id
             self._safe_app_call("set_session", self._session_id)
-            # Set bundle name for status bar display
-            self._safe_app_call("set_bundle_name", self.config.bundle)
+            # Set bundle name for status bar display (use actual bundle from session)
+            bundle_name = session_info.bundle or self.config.bundle
+            self._safe_app_call("set_bundle_name", bundle_name)
 
             # Start event listener for uncorrelated events (approvals, etc.)
             self._event_task = asyncio.create_task(self._event_loop())
@@ -522,6 +575,20 @@ class RuntimeBridge:
     # -------------------------------------------------------------------------
     # Completion Data APIs - Used by CompletionProvider for autocomplete
     # -------------------------------------------------------------------------
+
+    async def refresh_completion_data(self) -> None:
+        """Refresh completion data (agents, tools, commands) from runtime.
+
+        Call this when:
+        - Bundle changes (reset with new bundle)
+        - Agents are enabled/disabled
+        - Tools are added/removed
+        - User explicitly requests refresh
+
+        This is the public async method - use from async context.
+        """
+        await self._prefetch_completion_data()
+        logger.info("Completion data refreshed")
 
     async def _prefetch_completion_data(self) -> None:
         """Pre-fetch completion data (agents, tools, commands) after connecting.

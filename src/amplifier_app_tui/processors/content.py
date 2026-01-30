@@ -137,10 +137,8 @@ class ContentProcessor(EventProcessor):
         block.content += delta
 
         # Update UI if app available
-        if self._app:
-            output = self._app._get_output_zone()
-            if output and block.block_type != "thinking":
-                output.append_content(delta)
+        if self._app and block.block_type != "thinking":
+            self._app.append_content(delta)
 
         return ProcessorResult(
             handled=True,
@@ -199,7 +197,7 @@ class ContentProcessor(EventProcessor):
         thinking_block.content += delta
 
         if self._app:
-            self._app.stream_thinking(delta)
+            self._app.add_thinking(delta)
 
         return ProcessorResult(
             handled=True,

@@ -19,6 +19,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.css.query import NoMatches
 
+from .widgets.activity import ActivityPanel
 from .widgets.approval import ApprovalPanel
 from .widgets.header import AgentHeader
 from .widgets.input import InputZone
@@ -101,10 +102,28 @@ class AmplifierTUI(App):
         self._turn_count: int = 0
 
     def compose(self) -> ComposeResult:
-        """Compose the application layout."""
+        """Compose the application layout.
+
+        Layout:
+        ┌─ Header ───────────────────────────────────────────────────┐
+        │ Agent: claude › agent       ○ Ready      │ ● Connected    │
+        ├────────────────────────────────────────────┬──────────────┤
+        │                                            │ ▼ Activity   │
+        │  Main Chat (user + agent responses)       │ ◐ bash 3s    │
+        │                                            │ ○ read_file  │
+        │                                            ├──────────────┤
+        │                                            │ ▼ Tasks      │
+        │                                            │ ✓ Done       │
+        ├────────────────────────────────────────────┴──────────────┤
+        │ ┃ Enter your prompt...                                     │
+        ├────────────────────────────────────────────────────────────┤
+        │ ● Connected  session:abc  ws  Ready          ^P ^T Help   │
+        └────────────────────────────────────────────────────────────┘
+        """
         yield AgentHeader(id="header")
         yield Horizontal(
             OutputZone(id="output-zone"),
+            ActivityPanel(id="activity-panel"),
             TodoPanel(id="todo-panel"),
             id="main-workspace",
         )
@@ -433,8 +452,15 @@ class AmplifierTUI(App):
             output.end_thinking()
 
     # -------------------------------------------------------------------------
-    # Output Methods - Tool Calls
+    # Activity Panel Methods - Tools move to sidebar, not main chat
     # -------------------------------------------------------------------------
+
+    def _get_activity_panel(self) -> ActivityPanel | None:
+        """Get the activity panel if available."""
+        try:
+            return self.query_one("#activity-panel", ActivityPanel)
+        except Exception:
+            return None
 
     def add_tool_call(
         self,
@@ -443,33 +469,94 @@ class AmplifierTUI(App):
         result: str | None = None,
         status: str = "pending",
     ) -> str:
-        """Add a tool call block and return its ID for updates."""
-        if output := self._get_output_zone():
-            self.set_agent_state("executing")
-            return output.add_tool_call(tool_name, params, result, status)
-        return ""
+        """Add a tool to the activity panel (not main chat).
+
+        Returns activity ID for tracking updates.
+        """
+        from .widgets.activity import ActivityItem
+
+        self.set_agent_state("executing")
+
+        # Create activity item
+        import uuid
+
+        activity_id = str(uuid.uuid4())[:8]
+
+        # Format detail from params
+        detail = ""
+        if params:
+            first_key = next(iter(params), None)
+            if first_key:
+                val = str(params[first_key])[:50]
+                detail = val if len(val) < 50 else val[:47] + "..."
+
+        item = ActivityItem(
+            id=activity_id,
+            name=tool_name,
+            status="running" if status == "pending" else status,
+            detail=detail,
+        )
+
+        # Add to activity panel
+        if panel := self._get_activity_panel():
+            panel.add_activity(item)
+            self._update_status()  # Update status bar to show active count
+
+        return activity_id
 
     def update_tool_call(self, block_id: str, result: str, status: str) -> None:
-        """Update an existing tool call block."""
-        if output := self._get_output_zone():
-            output.update_tool_call(block_id, result, status)
+        """Update a tool in the activity panel."""
+        if panel := self._get_activity_panel():
+            # Create summary for result
+            summary = result[:100] if result else ""
+            if len(result) > 100:
+                summary = result[:97] + "..."
+
+            panel.update_activity(
+                block_id,
+                status=status,
+                result_summary=summary,
+            )
+
             if status in ("success", "error"):
                 self.set_agent_state("idle")
+                # Auto-remove completed items after a delay
+                self.set_timer(2.0, lambda: self._cleanup_activity(block_id))
+
+    def _cleanup_activity(self, activity_id: str) -> None:
+        """Remove completed activity from panel."""
+        if panel := self._get_activity_panel():
+            panel.remove_activity(activity_id)
 
     # -------------------------------------------------------------------------
     # Output Methods - Sub-Sessions (agent delegation)
     # -------------------------------------------------------------------------
 
     def start_sub_session(self, parent_tool_call_id: str, session_id: str, agent_name: str) -> None:
-        """Start tracking a sub-session (spawned agent)."""
-        if output := self._get_output_zone():
-            output.start_sub_session(parent_tool_call_id, session_id, agent_name)
-            self.set_agent_state("executing")
+        """Start tracking a sub-session in activity panel."""
+        from .widgets.activity import ActivityItem
+
+        # Add to activity panel instead of inline in main chat
+        item = ActivityItem(
+            id=parent_tool_call_id,
+            name="task",
+            status="running",
+            detail=f"@{agent_name}",
+            is_sub_session=True,
+            agent_name=agent_name,
+        )
+
+        if panel := self._get_activity_panel():
+            panel.add_activity(item)
+
+        self.set_agent_state("executing")
 
     def end_sub_session(self, parent_tool_call_id: str, status: str = "success") -> None:
-        """End tracking a sub-session."""
-        if output := self._get_output_zone():
-            output.end_sub_session(parent_tool_call_id, status)
+        """End tracking a sub-session in activity panel."""
+        if panel := self._get_activity_panel():
+            panel.update_activity(parent_tool_call_id, status=status)
+            # Auto-remove after delay
+            self.set_timer(2.0, lambda: self._cleanup_activity(parent_tool_call_id))
 
     # -------------------------------------------------------------------------
     # Output Methods - Inline Approvals (low-risk tools)

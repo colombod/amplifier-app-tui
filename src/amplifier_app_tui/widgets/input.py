@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.geometry import Offset, Region, Spacing
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Input, Static
@@ -23,9 +24,33 @@ from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 class SmartAutoComplete(AutoComplete):
     """AutoComplete that uses item.id for completion value instead of item.main.
 
+    Also positions dropdown ABOVE the input (since input is at bottom of screen).
+
     This allows displaying rich text (command + description) while only
     inserting the command/agent name on Tab.
     """
+
+    def _align_to_target(self) -> None:
+        """Override to position dropdown ABOVE the cursor instead of below.
+
+        The default positions at y+1 (below), but since our input is at the
+        bottom of the screen, we need to position above.
+        """
+        x, y = self.target.cursor_screen_offset
+        dropdown = self.option_list
+        width, height = dropdown.outer_size
+
+        # Position ABOVE the cursor (y - height instead of y + 1)
+        target_y = y - height
+
+        # Constrain within screen
+        x, target_y, _width, _height = Region(x - 1, target_y, width, height).constrain(
+            "inside",
+            "none",
+            Spacing.all(0),
+            self.screen.scrollable_content_region,
+        )
+        self.absolute_offset = Offset(x, target_y)
 
     def apply_completion(self, value: str, state: TargetState) -> None:
         """Override to use id field if available.

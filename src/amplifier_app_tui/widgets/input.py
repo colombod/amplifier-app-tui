@@ -207,28 +207,31 @@ class InputZone(Static):
             )
             yield prompt_input
 
-            # TODO: Re-enable autocomplete once textual-autocomplete issues resolved
-            # For now, skip autocomplete to avoid crashes
-            # if self._completion_provider:
-            #     yield AutoComplete(
-            #         prompt_input,
-            #         candidates=self._completion_provider.get_candidates,
-            #         id="autocomplete",
-            #     )
-            # else:
-            #     yield AutoComplete(
-            #         prompt_input,
-            #         candidates=self._get_static_candidates,
-            #         id="autocomplete",
-            #     )
+            # Add autocomplete dropdown attached to the input
+            if self._completion_provider:
+                yield AutoComplete(
+                    prompt_input,
+                    candidates=self._completion_provider.get_candidates,
+                    id="autocomplete",
+                )
+            else:
+                # Static completions fallback
+                yield AutoComplete(
+                    prompt_input,
+                    candidates=self._get_static_candidates,
+                    id="autocomplete",
+                )
 
         yield Static(
-            "Enter: send │ ↑↓: history",
+            "Enter: send │ ↑↓: history/menu │ Tab: complete",
             classes="input-hint",
         )
 
     def _get_static_candidates(self, state) -> list[DropdownItem]:
-        """Fallback static candidates when no provider."""
+        """Fallback static candidates when no provider.
+
+        IMPORTANT: main is what gets inserted on Tab, so keep it clean.
+        """
         try:
             from textual.content import Content
 
@@ -250,12 +253,12 @@ class InputZone(Static):
             items = []
             for cmd, desc in commands:
                 if cmd.startswith(text.lower()):
-                    # Include description in main text (suffix not supported)
-                    display = f"{cmd}  [dim]{desc}[/dim]"
+                    # Description in prefix (left side), command in main (gets inserted)
+                    prefix = Content.from_markup(f"[bold green]⌘[/] [dim]{desc:<25}[/dim] ")
                     items.append(
                         DropdownItem(
-                            main=Content.from_markup(display),
-                            prefix=Content.from_markup("[bold green]⌘[/] "),
+                            main=cmd,  # Just the command - this gets inserted
+                            prefix=prefix,
                         )
                     )
 
